@@ -1,0 +1,11 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Machine-local config — never commit
+pipeline/pipeline.yaml
+
+# Projects live outside the repo or locally only — never commit
+projects/

@@ -1,0 +1,12 @@
+[project]
+name = "tracking"
+version = "0.1.0"
+description = "Insect video tracking pipeline"
+requires-python = ">=3.11"
+
+dependencies = [
+    "opencv-python>=4.9",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "pyyaml>=6.0",
+]

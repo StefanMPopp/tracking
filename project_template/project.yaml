@@ -1,0 +1,55 @@
+# project.yaml — configuration for project: __PROJECT_NAME__
+#
+# This file is the single source of truth for all project-level parameters.
+# It is created from project_template/project.yaml by new_project.py.
+# Edit it before running any pipeline stage.
+
+project_name: __PROJECT_NAME__
+
+# =============================================================================
+# Arena
+# =============================================================================
+
+meta_real_width: null        # physical width of the arena in cm (required)
+track_max_individuals: null  # expected number of individuals (required)
+individual_prefix: ant       # prefix for individual IDs in TRex output
+
+# =============================================================================
+# Conversion range
+# =============================================================================
+
+# Frame range used for BOTH the full tracking run and sweep excerpts.
+# [start_frame, end_frame] — set end_frame to -1 for the full video.
+video_conversion_range: [0, 150]
+
+# =============================================================================
+# Threshold sweep (tune.py)
+# =============================================================================
+
+# detect_threshold values to compare side-by-side.
+# After reviewing the grid video, tune.py writes the confirmed value below.
+sweep_thresholds: [15, 25, 35, 50]
+confirmed_detect_threshold: null   # set automatically by tune.py
+
+# Layout of the side-by-side comparison grid video.
+grid_cols: 2
+
+# =============================================================================
+# Trials
+# =============================================================================
+
+# List all trial names (without file extension).
+# Each trial must have a video at 1_videos/{trial}.MP4
+trials: []
+
+# =============================================================================
+# Per-trial overrides (optional)
+# =============================================================================
+# Any key defined above can be overridden for a specific trial.
+# Uncomment and edit as needed.
+#
+# trial_overrides:
+#   trial_name:
+#     confirmed_detect_threshold: 40
+#     sweep_thresholds: [30, 40, 50, 60]
+#     track_max_individuals: 10

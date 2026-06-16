@@ -1,0 +1,6 @@
+# Copy this file to pipeline.yaml and edit for this machine.
+# pipeline.yaml is gitignored — never commit it.
+
+conda_env: trex              # name of the conda env where TRex is installed
+                             # use 'trex2' on Stefan's dev machine
+miniforge_dir: ~/miniforge3  # path to your Miniforge installation
