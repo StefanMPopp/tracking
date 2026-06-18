@@ -1,8 +1,7 @@
 # project.yaml — configuration for project: __PROJECT_NAME__
 #
-# This file is the single source of truth for all project-level parameters.
-# It is created from project_template/project.yaml by new_project.py.
-# Edit it before running any pipeline stage.
+# Created from project_template/project.yaml by new_project.py.
+# Edit before running any pipeline stage.
 
 project_name: __PROJECT_NAME__
 
@@ -15,41 +14,59 @@ track_max_individuals: null  # expected number of individuals (required)
 individual_prefix: ant       # prefix for individual IDs in TRex output
 
 # =============================================================================
-# Conversion range
+# Video files
 # =============================================================================
 
-# Frame range used for BOTH the full tracking run and sweep excerpts.
-# [start_frame, end_frame] — set end_frame to -1 for the full video.
-video_conversion_range: [0, 150]
+# File extension for all videos in this project (without leading dot).
+video_extension: MP4
+
+# List all video names (without extension).
+# Each video must be at 1_videos/{video_name}.{video_extension}
+videos: []
 
 # =============================================================================
-# Threshold sweep (tune.py)
+# Auto-detect circles (masks.py)
 # =============================================================================
+# Parameters for automatic circle detection in the mask editor.
+# These can also be set and saved directly from the editor UI.
+# auto_detect_circles:
+#   expected_count: 1
+#   diameter_cm: 4.5
+#   thickness_cm: 0.3
+#   hue_center: 0        # OpenCV HSV hue 0-179; 0=red, 60=green, 120=blue
+#   hue_tolerance: 15
+#   value_max: 120       # max brightness (low = dark colours)
+
+
+# [start_frame, end_frame] to process. Hierarchy (first set value wins):
+#   1. video_overrides.<video_name>.video_conversion_range  (per-video)
+#   2. video_conversion_range here                          (project-level)
+#   3. value in pipeline/default.settings                   (global default)
+# Leave commented out to use default.settings value.
+# video_conversion_range: [0, 150]
+
+
 
 # detect_threshold values to compare side-by-side.
 # After reviewing the grid video, tune.py writes the confirmed value below.
-sweep_thresholds: [15, 25, 35, 50]
+sweep_thresholds: [40, 50, 60, 70]
 confirmed_detect_threshold: null   # set automatically by tune.py
 
 # Layout of the side-by-side comparison grid video.
 grid_cols: 2
 
-# =============================================================================
-# Trials
-# =============================================================================
-
-# List all trial names (without file extension).
-# Each trial must have a video at 1_videos/{trial}.MP4
-trials: []
+# Duration of the position trail drawn behind each individual in annotated clips.
+trail_seconds: 1.0
 
 # =============================================================================
-# Per-trial overrides (optional)
+# Per-video overrides (optional)
 # =============================================================================
-# Any key defined above can be overridden for a specific trial.
-# Uncomment and edit as needed.
+# Any project-level key can be overridden per video.
+# video_conversion_range is the most common use: it varies per video and has
+# no project-level default (tune.py defaults to the full video if not set).
 #
-# trial_overrides:
-#   trial_name:
+# video_overrides:
+#   my_video:
+#     video_conversion_range: [0, 150]
 #     confirmed_detect_threshold: 40
 #     sweep_thresholds: [30, 40, 50, 60]
-#     track_max_individuals: 10

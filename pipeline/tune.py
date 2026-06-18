@@ -2,24 +2,24 @@
 tune.py — Threshold sweep CLI for TRex tracking parameter selection.
 
 Usage:
-    uv run python pipeline/tune.py --project /path/to/project --trial pain_test
-    uv run python pipeline/tune.py --project /path/to/project --trial pain_test --thresholds 20,28,35,50
+    uv run python pipeline/tune.py --project /path/to/project --video pain_test
+    uv run python pipeline/tune.py --project /path/to/project --video pain_test --thresholds 20,28,35,50
 
 For each candidate threshold the script:
-  1. Prepares the background image (if a *_average.MP4 is present in 1_videos/)
+  1. Prepares the background image (if a {video}_average.{ext} is present in 1_videos/)
   2. Runs TGrabs and TRex on the excerpt defined by video_conversion_range
   3. Renders an annotated clip with per-blob area (px, cm²) and speed (cm/s)
-  4. Composes a side-by-side grid video of all threshold variants
-  5. Opens the grid video and prompts you to accept a value or iterate
+  4. Opens each produced clip and prompts you to accept a value or iterate
 
+All outputs go directly into tuning/ (flat structure, no timestamped subfolders).
 Confirmed thresholds are written back to project.yaml.
-All sweep outputs are saved under tuning/sweep_{timestamp}/.
 A cumulative tuning/tuning_log.json is maintained across all sweeps.
 """
 
 import argparse
 import json
 import logging
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -76,16 +76,23 @@ def save_project_config(project_dir: Path, project_config: dict) -> None:
     )
 
 
-def resolve_trial_config(project_config: dict, trial: str) -> dict:
+def resolve_video_config(project_config: dict, video_name: str) -> dict:
     """
-    Return effective config for a trial: project-level values with any
-    trial-specific overrides applied on top.
+    Return effective config for a video: project-level values with any
+    per-video overrides applied on top.
+
+    video_conversion_range is intentionally NOT defaulted here. If absent
+    from both project-level and video-level config, it is left unset and
+    _sweep.py will not pass -video_conversion_range to TGrabs, letting
+    default.settings govern the range.
     """
     effective_config = dict(project_config)
-    trial_overrides  = (project_config.get("trial_overrides") or {}).get(trial, {})
-    if trial_overrides:
-        logger.info("Applying per-trial overrides for '%s': %s", trial, trial_overrides)
-        effective_config.update(trial_overrides)
+    video_overrides  = (project_config.get("video_overrides") or {}).get(video_name, {})
+    if video_overrides:
+        logger.info(
+            "Applying per-video overrides for '%s': %s", video_name, video_overrides
+        )
+        effective_config.update(video_overrides)
     return effective_config
 
 
@@ -95,18 +102,16 @@ def resolve_trial_config(project_config: dict, trial: str) -> dict:
 
 def append_tuning_log(
     tuning_dir: Path,
-    trial: str,
-    sweep_dir: Path,
+    video_name: str,
     thresholds_tested: list,
     confirmed_threshold: int | None,
     scope: str | None,
 ) -> None:
-    log_file = tuning_dir / "tuning_log.json"
+    log_file         = tuning_dir / "tuning_log.json"
     existing_entries = json.loads(log_file.read_text()) if log_file.exists() else []
     existing_entries.append({
         "timestamp":           datetime.now().isoformat(timespec="seconds"),
-        "trial":               trial,
-        "sweep_dir":           str(sweep_dir),
+        "video":               video_name,
         "thresholds_tested":   thresholds_tested,
         "confirmed_threshold": confirmed_threshold,
         "scope":               scope,
@@ -116,26 +121,44 @@ def append_tuning_log(
 
 
 # =============================================================================
+# Video playback
+# =============================================================================
+
+def open_clips(clip_files: list[Path]) -> None:
+    """
+    Open each annotated clip with the system video player, suppressing
+    player stderr/stdout to avoid VLC noise in the terminal.
+    Tries 'vlc' first (direct, suppressible), falls back to 'xdg-open'.
+    """
+    player = shutil.which("vlc") or shutil.which("xdg-open")
+    if player is None:
+        logger.info("No video player found. Open clips manually:")
+        for clip_file in clip_files:
+            logger.info("  %s", clip_file)
+        return
+
+    for clip_file in clip_files:
+        if not clip_file.exists():
+            logger.warning("Clip not found: %s", clip_file)
+            continue
+        subprocess.Popen(
+            [player, str(clip_file)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        logger.info("Opened: %s", clip_file)
+
+
+# =============================================================================
 # User interaction
 # =============================================================================
 
-def open_video(video_file: Path) -> None:
-    """Open a video with the system default player (non-blocking)."""
-    if not video_file.exists():
-        logger.warning("Video not found: %s", video_file)
-        return
-    try:
-        subprocess.Popen(["xdg-open", str(video_file)])
-    except FileNotFoundError:
-        logger.info("Could not auto-open video. Open manually:\n  %s", video_file)
-
-
-def prompt_decision(current_thresholds: list, trial: str) -> tuple:
+def prompt_decision(current_thresholds: list, video_name: str) -> tuple:
     """
-    Prompt the user after reviewing the grid video.
+    Prompt the user after reviewing the annotated clips.
 
     Returns one of:
-        ("accept",  (confirmed_value: int, scope: str))   scope = "project" | "trial"
+        ("accept",  (confirmed_value: int, scope: str))   scope = "project" | "video"
         ("resweep", new_thresholds: list)
         ("quit",    None)
     """
@@ -160,10 +183,10 @@ def prompt_decision(current_thresholds: list, trial: str) -> tuple:
                 print(f"  '{raw}' is not an integer. Try again.")
                 continue
             scope_raw = input(
-                f"Save as [p]roject-wide default or [t]rial override for '{trial}'? "
-                f"[p/t, default=p]: "
+                f"Save as [p]roject-wide default or [v]ideo override for '{video_name}'? "
+                f"[p/v, default=p]: "
             ).strip().lower() or "p"
-            scope = "trial" if scope_raw == "t" else "project"
+            scope = "video" if scope_raw == "v" else "project"
             return "accept", (confirmed_value, scope)
 
         if choice == "r":
@@ -191,12 +214,12 @@ def main() -> None:
     parser.add_argument(
         "--project",
         required=True,
-        help="Path to the project folder, e.g. /home/stefan/tracking/projects/pain_killers",
+        help="Path to the project folder, e.g. /path/to/projects/pain_killers",
     )
     parser.add_argument(
-        "--trial",
+        "--video",
         required=True,
-        help="Trial name without extension, e.g. pain_test",
+        help="Video name without extension, e.g. pain_test",
     )
     parser.add_argument(
         "--thresholds",
@@ -215,7 +238,7 @@ def main() -> None:
 
     pipeline_config  = load_pipeline_config()
     project_config   = load_project_config(project_dir)
-    effective_config = resolve_trial_config(project_config, args.trial)
+    effective_config = resolve_video_config(project_config, args.video)
 
     if args.thresholds:
         try:
@@ -229,16 +252,17 @@ def main() -> None:
     tuning_dir = project_dir / "tuning"
     tuning_dir.mkdir(exist_ok=True)
 
-    # Prepare background image once before any sweep iteration
+    video_extension = effective_config.get("video_extension", "MP4")
     prepare_background_image(
-        trial=args.trial,
+        video_name=args.video,
+        video_extension=video_extension,
         videos_dir=project_dir / "1_videos",
         pv_dir=project_dir / "2_pv",
     )
 
-    # ------------------------------------------------------------------
+    # ==========================================================================
     # Sweep loop
-    # ------------------------------------------------------------------
+    # ==========================================================================
     current_thresholds    = list(effective_config["sweep_thresholds"])
     all_thresholds_tested = []
 
@@ -246,32 +270,27 @@ def main() -> None:
         effective_config["sweep_thresholds"] = current_thresholds
         all_thresholds_tested.extend(current_thresholds)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        sweep_dir = tuning_dir / f"sweep_{timestamp}"
-        sweep_dir.mkdir(parents=True, exist_ok=True)
-
-        grid_video_file = run_sweep(
-            trial=args.trial,
+        clip_files = run_sweep(
+            video_name=args.video,
             project_dir=project_dir,
-            sweep_dir=sweep_dir,
+            tuning_dir=tuning_dir,
             base_settings_file=BASE_SETTINGS_FILE,
             pipeline_config=pipeline_config,
             effective_config=effective_config,
         )
 
-        open_video(grid_video_file)
+        open_clips(clip_files)
 
         decision, payload = prompt_decision(
             current_thresholds=current_thresholds,
-            trial=args.trial,
+            video_name=args.video,
         )
 
         # - - - quit - - -
         if decision == "quit":
             append_tuning_log(
                 tuning_dir=tuning_dir,
-                trial=args.trial,
-                sweep_dir=sweep_dir,
+                video_name=args.video,
                 thresholds_tested=all_thresholds_tested,
                 confirmed_threshold=None,
                 scope=None,
@@ -289,17 +308,17 @@ def main() -> None:
         if decision == "accept":
             confirmed_threshold, scope = payload
 
-            if scope == "trial":
-                if "trial_overrides" not in project_config:
-                    project_config["trial_overrides"] = {}
-                if args.trial not in project_config["trial_overrides"]:
-                    project_config["trial_overrides"][args.trial] = {}
-                project_config["trial_overrides"][args.trial][
+            if scope == "video":
+                if "video_overrides" not in project_config:
+                    project_config["video_overrides"] = {}
+                if args.video not in project_config["video_overrides"]:
+                    project_config["video_overrides"][args.video] = {}
+                project_config["video_overrides"][args.video][
                     "confirmed_detect_threshold"
                 ] = confirmed_threshold
                 logger.info(
-                    "Saved detect_threshold=%d as override for trial '%s'.",
-                    confirmed_threshold, args.trial,
+                    "Saved detect_threshold=%d as override for video '%s'.",
+                    confirmed_threshold, args.video,
                 )
             else:
                 project_config["confirmed_detect_threshold"] = confirmed_threshold
@@ -311,8 +330,7 @@ def main() -> None:
             save_project_config(project_dir, project_config)
             append_tuning_log(
                 tuning_dir=tuning_dir,
-                trial=args.trial,
-                sweep_dir=sweep_dir,
+                video_name=args.video,
                 thresholds_tested=all_thresholds_tested,
                 confirmed_threshold=confirmed_threshold,
                 scope=scope,

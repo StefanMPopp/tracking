@@ -30,7 +30,7 @@
 
 set -euo pipefail
 
-GITHUB_USER="<yourhandle>"   # ← replace with your GitHub username
+GITHUB_USER="StefanMPopp"
 REPO_NAME="tracking"
 INSTALL_DIR="${HOME}/tracking"
 PIPELINE_DIR="${INSTALL_DIR}/pipeline"
