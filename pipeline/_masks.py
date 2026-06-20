@@ -4,15 +4,22 @@ _masks.py — mask file I/O, TRex serialisation, and circle auto-detection.
 Mask files live in projects/{name}/masks/ and follow the naming convention:
     {video_name}_include_{n}.csv    ← one include polygon per file
     {video_name}_ignore_{n}.csv     ← one ignore polygon per file
-    default_include_{n}.csv         ← project-default include polygon
-    default_ignore_{n}.csv          ← project-default ignore polygon
+    {batch_name}_include_{n}.csv    ← shared across all videos in that batch
+    {batch_name}_ignore_{n}.csv
+    default_include_{n}.csv         ← project-wide default include polygon
+    default_ignore_{n}.csv          ← project-wide default ignore polygon
 
 Each CSV has two columns (no header): x, y — one vertex per row, in pixels
 relative to the full-resolution source frame.
 
-The pipeline (_sweep.py) reads only {video_name}_*.csv files. Default files
-are only read by the mask editor app. Saving a video's masks always produces
-per-video files; defaults are only updated via an explicit UI action.
+Resolution for a given video (see load_resolved_masks): video-specific masks
+win if present; otherwise the masks of the batch containing the video (see
+_resolve.py); otherwise the project-wide defaults. Tiers are not merged —
+the first tier with any shapes wins entirely.
+
+Saving a video's masks always produces per-video files. Batch and default
+files are only written via explicit UI actions ("save as batch defaults" /
+"save as project defaults").
 """
 
 import logging
@@ -45,6 +52,18 @@ def load_masks_for_video(video_name: str, masks_dir: Path) -> dict:
     }
 
 
+def load_masks_for_batch(batch_name: str, masks_dir: Path) -> dict:
+    """
+    Load all batch-level mask polygons from masks_dir.
+    Returns {"include": [...], "ignore": [...]}
+    Only reads {batch_name}_include_*.csv and {batch_name}_ignore_*.csv.
+    """
+    return {
+        "include": _load_polygon_files(masks_dir, f"{batch_name}_include_*.csv"),
+        "ignore":  _load_polygon_files(masks_dir, f"{batch_name}_ignore_*.csv"),
+    }
+
+
 def load_default_masks(masks_dir: Path) -> dict:
     """
     Load project-default mask polygons.
@@ -54,6 +73,46 @@ def load_default_masks(masks_dir: Path) -> dict:
         "include": _load_polygon_files(masks_dir, "default_include_*.csv"),
         "ignore":  _load_polygon_files(masks_dir, "default_ignore_*.csv"),
     }
+
+
+def load_resolved_masks(video_name: str, project_config: dict, masks_dir: Path) -> dict:
+    """
+    Resolve which mask files apply to video_name, following the hierarchy:
+        1. {video_name}_*.csv       (video-specific masks)
+        2. {batch_name}_*.csv       (the batch containing this video, if any)
+        3. default_*.csv            (project-wide default masks)
+
+    The first tier with ANY shapes (include or ignore) wins entirely — tiers
+    are not merged, since a partial mix of e.g. video-specific include shapes
+    with batch-level ignore shapes would be ambiguous to reason about.
+
+    Returns {"include": [...], "ignore": [...], "source": "video"|"batch"|"default"|"none"}
+    """
+    from _resolve import resolve_batch_for_video
+
+    video_masks = load_masks_for_video(video_name, masks_dir)
+    if video_masks["include"] or video_masks["ignore"]:
+        return {**video_masks, "source": "video"}
+
+    batch_name = resolve_batch_for_video(video_name, project_config)
+    if batch_name is not None:
+        batch_masks = load_masks_for_batch(batch_name, masks_dir)
+        if batch_masks["include"] or batch_masks["ignore"]:
+            logger.info(
+                "No video-specific masks for '%s' — using batch '%s' masks.",
+                video_name, batch_name,
+            )
+            return {**batch_masks, "source": "batch"}
+
+    default_masks = load_default_masks(masks_dir)
+    if default_masks["include"] or default_masks["ignore"]:
+        logger.info(
+            "No video-specific or batch masks for '%s' — using project defaults.",
+            video_name,
+        )
+        return {**default_masks, "source": "default"}
+
+    return {"include": [], "ignore": [], "source": "none"}
 
 
 def save_polygon(
@@ -125,6 +184,29 @@ def save_default_masks(shapes: list, masks_dir: Path) -> None:
             masks_dir=masks_dir,
         )
     logger.info("Saved %d shapes as project defaults.", len(shapes))
+
+
+def save_batch_masks(shapes: list, batch_name: str, masks_dir: Path) -> None:
+    """
+    Overwrite all {batch_name}_*.csv files with the given shapes.
+    Existing batch files are deleted first to avoid stale files.
+
+    shapes: list of dicts with keys 'type' ('include'|'ignore') and
+            'vertices' ([[x,y], ...])
+    """
+    for old_file in masks_dir.glob(f"{batch_name}_include_*.csv"):
+        old_file.unlink()
+    for old_file in masks_dir.glob(f"{batch_name}_ignore_*.csv"):
+        old_file.unlink()
+
+    for shape in shapes:
+        save_polygon(
+            polygon=shape["vertices"],
+            prefix=batch_name,
+            mask_type=shape["type"],
+            masks_dir=masks_dir,
+        )
+    logger.info("Saved %d shapes as defaults for batch '%s'.", len(shapes), batch_name)
 
 
 # =============================================================================

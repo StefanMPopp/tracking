@@ -30,6 +30,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent))
 
 from _background import background_image_path
+from _resolve import resolve_effective_config
 from _sweep import run_sweep
 
 logging.basicConfig(
@@ -76,24 +77,11 @@ def save_project_config(project_dir: Path, project_config: dict) -> None:
     )
 
 
-def resolve_video_config(project_config: dict, video_name: str) -> dict:
-    """
-    Return effective config for a video: project-level values with any
-    per-video overrides applied on top.
-
-    video_conversion_range is intentionally NOT defaulted here. If absent
-    from both project-level and video-level config, it is left unset and
-    _sweep.py will not pass -video_conversion_range to TGrabs, letting
-    default.settings govern the range.
-    """
-    effective_config = dict(project_config)
-    video_overrides  = (project_config.get("video_overrides") or {}).get(video_name, {})
-    if video_overrides:
-        logger.info(
-            "Applying per-video overrides for '%s': %s", video_name, video_overrides
-        )
-        effective_config.update(video_overrides)
-    return effective_config
+# resolve_effective_config is imported from _resolve (shared with app.py tabs)
+# and layers: project-level → batch → video_overrides.
+# video_conversion_range is intentionally NOT defaulted at any layer. If absent
+# everywhere, it is left unset and _sweep.py will not pass -video_conversion_range
+# to TGrabs, letting default.settings govern the range.
 
 
 # =============================================================================
@@ -238,7 +226,7 @@ def main() -> None:
 
     pipeline_config  = load_pipeline_config()
     project_config   = load_project_config(project_dir)
-    effective_config = resolve_video_config(project_config, args.video)
+    effective_config = resolve_effective_config(args.video, project_config)
 
     if args.thresholds:
         try:
@@ -279,6 +267,7 @@ def main() -> None:
             base_settings_file=BASE_SETTINGS_FILE,
             pipeline_config=pipeline_config,
             effective_config=effective_config,
+            project_config=project_config,
         )
 
         open_clips(clip_files)

@@ -64,10 +64,15 @@ def run_sweep(
     base_settings_file: Path,
     pipeline_config: dict,
     effective_config: dict,
+    project_config: dict,
 ) -> list[Path]:
     """
     Run TGrabs + TRex for each threshold in effective_config["sweep_thresholds"]
     and render one annotated clip per threshold into tuning_dir.
+
+    project_config (the raw, unresolved project.yaml contents) is needed
+    separately from effective_config to resolve which batch (if any) this
+    video belongs to, for mask resolution.
 
     Returns a list of produced clip file paths.
     """
@@ -141,16 +146,16 @@ def run_sweep(
         if video_conversion_range is not None:
             overrides["video_conversion_range"] = video_conversion_range
 
-        # Apply masks if present for this video
-        from _masks import load_masks_for_video, masks_to_trex_string
-        masks     = load_masks_for_video(video_name, project_dir / "masks")
+        # Apply masks if present for this video (video → batch → default)
+        from _masks import load_resolved_masks, masks_to_trex_string
+        masks       = load_resolved_masks(video_name, project_config, project_dir / "masks")
         has_include = bool(masks["include"])
         has_ignore  = bool(masks["ignore"])
         if has_include and has_ignore:
             logger.warning(
-                "Both include and ignore masks found for '%s'. "
+                "Both include and ignore masks found for '%s' (source: %s). "
                 "TRex will ignore the ignore masks when include masks are set.",
-                video_name,
+                video_name, masks["source"],
             )
         if has_include:
             overrides["track_include"] = masks_to_trex_string(masks["include"])

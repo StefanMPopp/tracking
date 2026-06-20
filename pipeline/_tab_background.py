@@ -17,7 +17,7 @@ from pathlib import Path
 import cv2
 import yaml
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from _background import (
@@ -58,6 +58,21 @@ class SaveParamsRequest(BaseModel):
 # =============================================================================
 
 def register_background_routes(app: FastAPI, state: dict) -> None:
+
+    @app.get("/background/video-file")
+    def get_video_file():
+        """
+        Serve the current video file directly for the <video> viewer.
+        FileResponse supports HTTP range requests natively, so the browser
+        can scrub without downloading the whole file first.
+        media_type is derived from the actual file extension rather than
+        assumed, since video_extension in project.yaml could be anything
+        the browser supports (mp4, mov, webm, ...).
+        """
+        return FileResponse(
+            path=state["video_file"],
+            media_type=_guess_video_mime_type(state["video_file"]),
+        )
 
     @app.get("/background/info")
     def get_info():
@@ -110,7 +125,7 @@ def register_background_routes(app: FastAPI, state: dict) -> None:
         """Compute a candidate background image; does not save to disk."""
         video_name      = state["video_name"]
         video_extension = state["video_extension"]
-        videos_dir      = state["project_dir"] / "1_videos"
+        videos_dir      = state["videos_dir"]
 
         source_file, is_dedicated = resolve_background_source(
             video_name=video_name,
@@ -149,7 +164,7 @@ def register_background_routes(app: FastAPI, state: dict) -> None:
         """
         video_name      = state["video_name"]
         video_extension = state["video_extension"]
-        videos_dir      = state["project_dir"] / "1_videos"
+        videos_dir      = state["videos_dir"]
         pv_dir          = state["pv_dir"]
 
         output_file = background_image_path(video_name, pv_dir)
@@ -220,6 +235,21 @@ def _save_video_override_if_different(state: dict, request: SaveRequest) -> None
 
     _write_project_config(state, project_config)
     logger.info("Saved video-level background_params override for '%s': %s", video_name, used_params)
+
+
+VIDEO_MIME_TYPES = {
+    ".mp4":  "video/mp4",
+    ".m4v":  "video/mp4",
+    ".mov":  "video/quicktime",
+    ".webm": "video/webm",
+    ".avi":  "video/x-msvideo",
+    ".mkv":  "video/x-matroska",
+}
+
+
+def _guess_video_mime_type(video_file: Path) -> str:
+    """Map a file extension to a MIME type the browser can use for playback."""
+    return VIDEO_MIME_TYPES.get(video_file.suffix.lower(), "video/mp4")
 
 
 def _image_file_to_b64(image_file: Path) -> str:
@@ -308,7 +338,19 @@ def build_background_tab_html(video_name: str) -> str:
   <div style="flex:1; display:flex; align-items:center; justify-content:center;
        padding:16px; overflow:auto;">
     <div id="bg-grid" style="display:grid; grid-template-columns:1fr 1fr;
-         gap:12px; width:100%; height:100%; max-width:1100px;"></div>
+         gap:12px; width:100%; height:100%; max-width:1100px;">
+      <div id="bg-video-cell" style="position:relative; border:2px solid #333;
+           border-radius:6px; overflow:hidden; display:flex; align-items:center;
+           justify-content:center; background:#000;">
+        <video id="bg-video-viewer" controls style="max-width:100%; max-height:100%;
+               width:100%; height:100%; object-fit:contain;"></video>
+        <span style="position:absolute; top:4px; left:4px; font-size:10px;
+              background:rgba(0,0,0,0.7); color:#7ec8e3; padding:2px 6px;
+              border-radius:3px;">video</span>
+      </div>
+      <div id="bg-candidates"
+           style="display:contents;"></div>
+    </div>
   </div>
 
   <div id="bg-overwrite-overlay" style="display:none; position:fixed; inset:0;
@@ -340,6 +382,7 @@ def build_background_tab_html(video_name: str) -> str:
   let bgPendingSave = null;
 
   window.bgInit = async function() {{
+    document.getElementById("bg-video-viewer").src = "/background/video-file";
     await bgLoadInfo();
     await bgLoadParams();
   }};
@@ -378,8 +421,8 @@ def build_background_tab_html(video_name: str) -> str:
   }}
 
   window.bgGenerate = async function() {{
-    if (bgCandidates.length >= 4) {{
-      bgSetStatus("Grid is full (4 max). Delete one first (select + Del).");
+    if (bgCandidates.length >= 3) {{
+      bgSetStatus("3 candidates max. Delete one first (select + Del).");
       return;
     }}
     bgSetStatus("Generating…");
@@ -401,7 +444,7 @@ def build_background_tab_html(video_name: str) -> str:
   }}
 
   function bgRenderGrid() {{
-    const grid = document.getElementById("bg-grid");
+    const grid = document.getElementById("bg-candidates");
     grid.innerHTML = "";
     bgCandidates.forEach(c => {{
       const cell = document.createElement("div");
@@ -492,6 +535,10 @@ def build_background_tab_html(video_name: str) -> str:
       bgRenderGrid();
     }}
   }});
+
+  // Background tab is rendered once per page load (not lazily), so initialise
+  // immediately rather than waiting for a tab-activation event.
+  window.bgInit();
 }})();
 </script>
 """

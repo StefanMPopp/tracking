@@ -30,6 +30,7 @@ from _masks import (
     detect_circles,
     load_default_masks,
     load_masks_for_video,
+    save_batch_masks,
     save_default_masks,
     save_polygon,
 )
@@ -96,6 +97,42 @@ def register_masks_routes(app: FastAPI, state: dict) -> None:
             shapes.append({"filename": mask_file.name, "type": mask_type,
                            "vertices": _read_polygon_csv_raw(mask_file)})
         return JSONResponse({"shapes": shapes})
+
+    @app.get("/masks-frame/masks/batch")
+    def get_batch_masks():
+        """
+        Return the batch containing the current video (if any) and that
+        batch's mask shapes. batch_name is null if the video is not in
+        any batch.
+        """
+        from _resolve import resolve_batch_for_video
+        project_config = yaml.safe_load(state["project_yaml_file"].read_text())
+        batch_name = resolve_batch_for_video(state["video_name"], project_config)
+
+        shapes = []
+        if batch_name is not None:
+            masks_dir = state["masks_dir"]
+            for mask_file in sorted(masks_dir.glob(f"{batch_name}_include_*.csv")) + \
+                             sorted(masks_dir.glob(f"{batch_name}_ignore_*.csv")):
+                mask_type = "include" if "_include_" in mask_file.name else "ignore"
+                shapes.append({"filename": mask_file.name, "type": mask_type,
+                               "vertices": _read_polygon_csv_raw(mask_file)})
+
+        return JSONResponse({"batch_name": batch_name, "shapes": shapes})
+
+    @app.post("/masks-frame/masks/save-batch-defaults")
+    def save_batch_defaults(request: DefaultSaveRequest):
+        """Save current shapes as defaults for the batch containing this video."""
+        from _resolve import resolve_batch_for_video
+        project_config = yaml.safe_load(state["project_yaml_file"].read_text())
+        batch_name = resolve_batch_for_video(state["video_name"], project_config)
+        if batch_name is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Current video does not belong to any batch.",
+            )
+        save_batch_masks(request.shapes, batch_name, state["masks_dir"])
+        return JSONResponse({"saved": len(request.shapes), "batch_name": batch_name})
 
     @app.post("/masks-frame/masks/save")
     def save_mask(request: PolygonSaveRequest):
@@ -279,6 +316,14 @@ canvas {{ display: block; }}
   </div>
 
   <div class="section">
+    <h3>Batch defaults</h3>
+    <div id="batch-name-label" style="font-size:11px; color:#789; margin-bottom:6px;">
+      Checking batch…</div>
+    <button class="btn-default"  onclick="loadBatchDefaults()">📂 Load batch defaults</button>
+    <button class="btn-save-def" style="margin-top:5px" onclick="saveAsBatchDefaults()">⭐ Save current as batch defaults</button>
+  </div>
+
+  <div class="section">
     <h3>Project defaults</h3>
     <button class="btn-default"  onclick="loadDefaults()">📂 Load project defaults</button>
     <button class="btn-save-def" style="margin-top:5px"
@@ -375,6 +420,7 @@ window.onload = async () => {{
   await loadFrame();
   await loadExistingMasks();
   await loadAutoDetectParams();
+  await checkBatch();
   listenForServerShutdown();
   setStatus("Ready — " + VIDEO_NAME);
 }};
@@ -988,6 +1034,35 @@ async function saveDetectParams() {{
   }};
   await fetch("/masks-frame/project/auto-detect-params",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{params}})}});
   setStatus("Auto-detect params saved to project.yaml.");
+}}
+
+// ============================================================
+// Batch defaults
+// ============================================================
+let currentBatchName = null;
+
+async function checkBatch() {{
+  const res = await fetch("/masks-frame/masks/batch"), d = await res.json();
+  currentBatchName = d.batch_name;
+  const label = document.getElementById("batch-name-label");
+  label.textContent = currentBatchName
+    ? `Batch: ${{currentBatchName}}`
+    : "This video is not in any batch.";
+}}
+
+async function loadBatchDefaults() {{
+  const res = await fetch("/masks-frame/masks/batch"), d = await res.json();
+  if (!d.batch_name) {{ setStatus("This video is not in any batch."); return; }}
+  d.shapes.forEach(s => addShape(s.vertices, s.type, null, false));
+  setStatus(`Loaded ${{d.shapes.length}} shape(s) from batch '${{d.batch_name}}'.`);
+}}
+
+async function saveAsBatchDefaults() {{
+  if (!currentBatchName) {{ setStatus("This video is not in any batch — cannot save batch defaults."); return; }}
+  const body = {{shapes: shapes.map(s=>{{return{{type:s.type,vertices:s.vertices}}}})}};
+  await fetch("/masks-frame/masks/save-batch-defaults", {{method:"POST",
+    headers:{{"Content-Type":"application/json"}}, body:JSON.stringify(body)}});
+  setStatus(`Saved as defaults for batch '${{currentBatchName}}'.`);
 }}
 
 // ============================================================

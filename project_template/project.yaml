@@ -70,9 +70,29 @@ grid_cols: 2
 trail_seconds: 1.0
 
 # =============================================================================
+# Batches (optional)
+# =============================================================================
+# Group videos that share settings — e.g. all videos from one day, or one
+# treatment. Any project-level key can be set inside a batch; batch settings
+# override project-level settings but are overridden by video_overrides.
+#
+# A video must not appear in more than one batch. Masks also support a
+# batch tier: masks/{batch_name}_include_*.csv / _ignore_*.csv, resolved
+# between video-specific masks and project-default masks.
+#
+# batches:
+#   day1_control:
+#     videos: [vid_001, vid_002, vid_003]
+#     sweep_thresholds: [40, 50, 60]
+#     confirmed_detect_threshold: 50
+#   day1_treatment:
+#     videos: [vid_004, vid_005]
+#     confirmed_detect_threshold: 65
+
+# =============================================================================
 # Per-video overrides (optional)
 # =============================================================================
-# Any project-level key can be overridden per video.
+# Any project-level or batch-level key can be overridden per video.
 # video_conversion_range is the most common use: it varies per video and has
 # no project-level default (tune.py defaults to the full video if not set).
 #
