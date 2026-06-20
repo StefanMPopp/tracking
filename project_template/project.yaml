@@ -25,6 +25,17 @@ video_extension: MP4
 videos: []
 
 # =============================================================================
+# Background image (background tab in app.py)
+# =============================================================================
+# Default parameters for computing average_{video_name}.png.
+# These can also be set and saved directly from the app UI.
+# background_params:
+#   method: median       # mean | median | max | min
+#   n_images: 10
+#   start_time: null      # seconds; null = auto (video start + 1s)
+#   end_time: null        # seconds; null = auto (video end - 1s)
+
+# =============================================================================
 # Auto-detect circles (masks.py)
 # =============================================================================
 # Parameters for automatic circle detection in the mask editor.

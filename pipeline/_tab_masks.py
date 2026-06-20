@@ -1,32 +1,30 @@
 """
-masks.py — Interactive mask editor for TRex tracking regions.
+_tab_masks.py — Masks tab for the unified pipeline app.
 
-Usage:
-    uv run python pipeline/masks.py --project /path/to/project --video pain_test
-    uv run python pipeline/masks.py --project /path/to/project --video pain_test --frame 500
+The mask editor is complex enough (canvas drawing, drag/rotate/resize state)
+that it is kept as a fully self-contained HTML document, served at
+/masks-frame and embedded via <iframe> in the masks tab pane. This avoids any
+risk of JS variable/function collisions with other tabs while still giving
+a uniform shell (tab switcher, close button) around it.
 
-Press Q in the browser or Ctrl+C in the terminal to quit.
-Ctrl+S saves shapes for the video; Ctrl+Shift+S saves as project defaults.
+The underlying editor logic and routes are unchanged from the original
+standalone masks.py — only the entry point (served via iframe instead of as
+the page root) and route registration (via register_masks_routes(app, state)
+instead of module-level @app decorators) differ. Route paths are prefixed
+with /masks-frame/ to avoid colliding with other tabs' routes.
 """
 
-import argparse
 import base64
 import logging
-import subprocess
-import sys
-import threading
-import time
 from pathlib import Path
 
 import cv2
 import numpy as np
-import uvicorn
 import yaml
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-sys.path.insert(0, str(Path(__file__).parent))
 from _masks import (
     delete_polygon,
     detect_circles,
@@ -36,18 +34,7 @@ from _masks import (
     save_polygon,
 )
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s  %(levelname)-8s  %(message)s",
-                    datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
-
-# =============================================================================
-# App state
-# =============================================================================
-
-app      = FastAPI()
-APP_STATE: dict = {}
-_server: uvicorn.Server | None = None
 
 
 # =============================================================================
@@ -76,126 +63,109 @@ class AutoDetectParamsRequest(BaseModel):
 
 
 # =============================================================================
-# API routes
+# Route registration
 # =============================================================================
 
-@app.get("/frame")
-def get_frame():
-    frame     = APP_STATE["frame"]
-    _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
-    b64       = base64.b64encode(buffer).decode("utf-8")
-    return JSONResponse({"image": b64, "frame_width": frame.shape[1], "frame_height": frame.shape[0]})
+def register_masks_routes(app: FastAPI, state: dict) -> None:
 
+    @app.get("/masks-frame/frame")
+    def get_frame():
+        frame     = state["display_frame"]
+        _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        b64       = base64.b64encode(buffer).decode("utf-8")
+        return JSONResponse({"image": b64, "frame_width": frame.shape[1], "frame_height": frame.shape[0]})
 
-@app.get("/masks")
-def get_masks():
-    masks_dir  = APP_STATE["masks_dir"]
-    video_name = APP_STATE["video_name"]
-    shapes = []
-    for mask_file in (sorted(masks_dir.glob(f"{video_name}_include_*.csv")) +
-                      sorted(masks_dir.glob(f"{video_name}_ignore_*.csv"))):
-        mask_type = "include" if "_include_" in mask_file.name else "ignore"
-        shapes.append({"filename": mask_file.name, "type": mask_type,
-                       "vertices": _read_polygon_csv_raw(mask_file)})
-    return JSONResponse({"shapes": shapes})
+    @app.get("/masks-frame/masks")
+    def get_masks():
+        masks_dir  = state["masks_dir"]
+        video_name = state["video_name"]
+        shapes = []
+        for mask_file in (sorted(masks_dir.glob(f"{video_name}_include_*.csv")) +
+                          sorted(masks_dir.glob(f"{video_name}_ignore_*.csv"))):
+            mask_type = "include" if "_include_" in mask_file.name else "ignore"
+            shapes.append({"filename": mask_file.name, "type": mask_type,
+                           "vertices": _read_polygon_csv_raw(mask_file)})
+        return JSONResponse({"shapes": shapes})
 
+    @app.get("/masks-frame/masks/defaults")
+    def get_default_masks():
+        masks_dir = state["masks_dir"]
+        shapes = []
+        for mask_file in sorted(masks_dir.glob("default_*.csv")):
+            mask_type = "include" if "_include_" in mask_file.name else "ignore"
+            shapes.append({"filename": mask_file.name, "type": mask_type,
+                           "vertices": _read_polygon_csv_raw(mask_file)})
+        return JSONResponse({"shapes": shapes})
 
-@app.get("/masks/defaults")
-def get_default_masks():
-    masks_dir = APP_STATE["masks_dir"]
-    shapes = []
-    for mask_file in sorted(masks_dir.glob("default_*.csv")):
-        mask_type = "include" if "_include_" in mask_file.name else "ignore"
-        shapes.append({"filename": mask_file.name, "type": mask_type,
-                       "vertices": _read_polygon_csv_raw(mask_file)})
-    return JSONResponse({"shapes": shapes})
+    @app.post("/masks-frame/masks/save")
+    def save_mask(request: PolygonSaveRequest):
+        masks_dir = state["masks_dir"]
+        if request.mask_type not in ("include", "ignore"):
+            raise HTTPException(status_code=400, detail="mask_type must be 'include' or 'ignore'")
+        filename = save_polygon(polygon=request.vertices, prefix=request.prefix,
+                                mask_type=request.mask_type, masks_dir=masks_dir)
+        return JSONResponse({"filename": filename})
 
+    @app.delete("/masks-frame/masks/{filename}")
+    def delete_mask(filename: str):
+        delete_polygon(filename, state["masks_dir"])
+        return JSONResponse({"deleted": filename})
 
-@app.post("/masks/save")
-def save_mask(request: PolygonSaveRequest):
-    masks_dir = APP_STATE["masks_dir"]
-    if request.mask_type not in ("include", "ignore"):
-        raise HTTPException(status_code=400, detail="mask_type must be 'include' or 'ignore'")
-    filename = save_polygon(polygon=request.vertices, prefix=request.prefix,
-                            mask_type=request.mask_type, masks_dir=masks_dir)
-    return JSONResponse({"filename": filename})
+    @app.post("/masks-frame/masks/save-defaults")
+    def save_defaults(request: DefaultSaveRequest):
+        save_default_masks(request.shapes, state["masks_dir"])
+        return JSONResponse({"saved": len(request.shapes)})
 
+    @app.post("/masks-frame/masks/detect")
+    def run_detection(request: DetectRequest):
+        frame    = state["display_frame"]
+        polygons = detect_circles(
+            frame=frame, diameter_cm=request.diameter_cm, thickness_cm=request.thickness_cm,
+            meta_real_width=state["meta_real_width"], expected_count=request.expected_count,
+            hue_center=request.hue_center, hue_tolerance=request.hue_tolerance,
+            saturation_min=request.saturation_min, value_max=request.value_max,
+        )
+        return JSONResponse({"polygons": polygons, "count": len(polygons)})
 
-@app.delete("/masks/{filename}")
-def delete_mask(filename: str):
-    delete_polygon(filename, APP_STATE["masks_dir"])
-    return JSONResponse({"deleted": filename})
+    @app.get("/masks-frame/project/auto-detect-params")
+    def get_auto_detect_params():
+        cfg = yaml.safe_load(state["project_yaml_file"].read_text())
+        return JSONResponse(cfg.get("auto_detect_circles") or {})
 
+    @app.post("/masks-frame/project/auto-detect-params")
+    def save_auto_detect_params(request: AutoDetectParamsRequest):
+        f   = state["project_yaml_file"]
+        cfg = yaml.safe_load(f.read_text())
+        cfg["auto_detect_circles"] = request.params
+        f.write_text(yaml.dump(cfg, default_flow_style=False, sort_keys=False))
+        return JSONResponse({"saved": True})
 
-@app.post("/masks/save-defaults")
-def save_defaults(request: DefaultSaveRequest):
-    save_default_masks(request.shapes, APP_STATE["masks_dir"])
-    return JSONResponse({"saved": len(request.shapes)})
-
-
-@app.post("/masks/detect")
-def run_detection(request: DetectRequest):
-    frame    = APP_STATE["frame"]
-    polygons = detect_circles(
-        frame=frame, diameter_cm=request.diameter_cm, thickness_cm=request.thickness_cm,
-        meta_real_width=APP_STATE["meta_real_width"], expected_count=request.expected_count,
-        hue_center=request.hue_center, hue_tolerance=request.hue_tolerance,
-        saturation_min=request.saturation_min, value_max=request.value_max,
-    )
-    return JSONResponse({"polygons": polygons, "count": len(polygons)})
-
-
-@app.get("/project/auto-detect-params")
-def get_auto_detect_params():
-    cfg = yaml.safe_load((APP_STATE["project_dir"] / "project.yaml").read_text())
-    return JSONResponse(cfg.get("auto_detect_circles") or {})
-
-
-@app.post("/project/auto-detect-params")
-def save_auto_detect_params(request: AutoDetectParamsRequest):
-    f   = APP_STATE["project_dir"] / "project.yaml"
-    cfg = yaml.safe_load(f.read_text())
-    cfg["auto_detect_circles"] = request.params
-    f.write_text(yaml.dump(cfg, default_flow_style=False, sort_keys=False))
-    return JSONResponse({"saved": True})
-
-
-@app.post("/shutdown")
-def shutdown():
-    def _stop():
-        time.sleep(0.2)
-        if _server:
-            _server.should_exit = True
-    threading.Thread(target=_stop, daemon=True).start()
-    return JSONResponse({"ok": True})
-
-
-@app.get("/events")
-def sse_events():
-    def stream():
-        try:
-            while True:
-                yield "data: ping\n\n"
-                time.sleep(2)
-        except GeneratorExit:
-            pass
-    return StreamingResponse(stream(), media_type="text/event-stream")
-
-
-@app.get("/", response_class=HTMLResponse)
-def index():
-    return HTMLResponse(_build_html(
-        video_name=APP_STATE["video_name"],
-        frame_width=APP_STATE["frame"].shape[1],
-        frame_height=APP_STATE["frame"].shape[0],
-    ))
+    @app.get("/masks-frame", response_class=HTMLResponse)
+    def masks_frame():
+        frame = state["display_frame"]
+        return HTMLResponse(_build_masks_frame_html(
+            video_name=state["video_name"],
+            frame_width=frame.shape[1],
+            frame_height=frame.shape[0],
+        ))
 
 
 # =============================================================================
-# HTML + JS frontend
+# HTML fragment for the tab (just an iframe pointing at /masks-frame)
 # =============================================================================
 
-def _build_html(video_name: str, frame_width: int, frame_height: int) -> str:
+def build_masks_tab_html(video_name: str) -> str:
+    return """
+<iframe id="masks-iframe" src="/masks-frame" style="width:100%; height:100%; border:none;"></iframe>
+"""
+
+
+# =============================================================================
+# Full standalone HTML document for the iframe (original masks editor,
+# routes repointed to /masks-frame/* to avoid colliding with other tabs)
+# =============================================================================
+
+def _build_masks_frame_html(video_name: str, frame_width: int, frame_height: int) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -428,7 +398,7 @@ function wireSliders() {{
 }}
 
 async function loadFrame() {{
-  const res = await fetch("/frame"), d = await res.json();
+  const res = await fetch("/masks-frame/frame"), d = await res.json();
   nativeW = d.frame_width; nativeH = d.frame_height;
   img = new Image();
   img.src = "data:image/jpeg;base64," + d.image;
@@ -448,12 +418,12 @@ function resizeCanvas() {{
 }}
 
 async function loadExistingMasks() {{
-  const res = await fetch("/masks"), d = await res.json();
+  const res = await fetch("/masks-frame/masks"), d = await res.json();
   d.shapes.forEach(s => addShape(s.vertices, s.type, s.filename));
 }}
 
 async function loadAutoDetectParams() {{
-  const res = await fetch("/project/auto-detect-params"), d = await res.json();
+  const res = await fetch("/masks-frame/project/auto-detect-params"), d = await res.json();
   if (d.diameter_cm)    document.getElementById("det-diameter").value  = d.diameter_cm;
   if (d.thickness_cm)   document.getElementById("det-thickness").value = d.thickness_cm;
   if (d.expected_count) document.getElementById("det-count").value     = d.expected_count;
@@ -473,7 +443,7 @@ function addShape(vertices, type, filename=null, proposed=false) {{
 function removeShape(id) {{
   const shape = shapes.find(s => s.id === id);
   if (!shape) return;
-  if (shape.filename) fetch(`/masks/${{shape.filename}}`, {{method:"DELETE"}});
+  if (shape.filename) fetch(`/masks-frame/masks/${{shape.filename}}`, {{method:"DELETE"}});
   shapes    = shapes.filter(s => s.id !== id);
   selectedId = (selectedId === id) ? null : selectedId;
   refreshShapeList(); redraw();
@@ -1000,7 +970,7 @@ async function runDetect() {{
     saturation_min: 80,
     value_max:      parseInt(document.getElementById("det-brightness").value),
   }};
-  const res=await fetch("/masks/detect",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(body)}});
+  const res=await fetch("/masks-frame/masks/detect",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(body)}});
   const d=await res.json();
   d.polygons.forEach(verts=>addShape(verts,maskType,null,true));
   setStatus(`Detection complete: ${{d.count}} circle(s) found.`);
@@ -1016,7 +986,7 @@ async function saveDetectParams() {{
     hue_tolerance:  parseInt(document.getElementById("det-hue-tol").value),
     value_max:      parseInt(document.getElementById("det-brightness").value),
   }};
-  await fetch("/project/auto-detect-params",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{params}})}});
+  await fetch("/masks-frame/project/auto-detect-params",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{params}})}});
   setStatus("Auto-detect params saved to project.yaml.");
 }}
 
@@ -1024,14 +994,14 @@ async function saveDetectParams() {{
 // Defaults
 // ============================================================
 async function loadDefaults() {{
-  const res=await fetch("/masks/defaults"),d=await res.json();
+  const res=await fetch("/masks-frame/masks/defaults"),d=await res.json();
   d.shapes.forEach(s=>addShape(s.vertices,s.type,null,false));
   setStatus(`Loaded ${{d.shapes.length}} default shape(s).`);
 }}
 
 async function saveAsDefaults() {{
   const body={{shapes:shapes.map(s=>{{return{{type:s.type,vertices:s.vertices}}}})}};
-  await fetch("/masks/save-defaults",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(body)}});
+  await fetch("/masks-frame/masks/save-defaults",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(body)}});
   setStatus("Saved as project defaults.");
 }}
 
@@ -1042,7 +1012,7 @@ async function saveAll() {{
   let saved=0;
   for (const shape of shapes) {{
     if (!shape.filename) {{
-      const res=await fetch("/masks/save",{{method:"POST",headers:{{"Content-Type":"application/json"}},
+      const res=await fetch("/masks-frame/masks/save",{{method:"POST",headers:{{"Content-Type":"application/json"}},
         body:JSON.stringify({{vertices:shape.vertices,mask_type:shape.type,prefix:VIDEO_NAME}})}});
       const d=await res.json();
       shape.filename=d.filename; shape.proposed=false; saved++;
@@ -1069,7 +1039,6 @@ function hexToHsv(hex) {{
 </body>
 </html>"""
 
-
 # =============================================================================
 # Helpers
 # =============================================================================
@@ -1087,78 +1056,3 @@ def _read_polygon_csv_raw(polygon_file: Path) -> list:
             except ValueError:
                 pass
     return vertices
-
-
-def _extract_frame(video_file: Path, frame_index: int | None) -> np.ndarray:
-    capture = cv2.VideoCapture(str(video_file))
-    if not capture.isOpened():
-        raise RuntimeError(f"Cannot open video: {video_file}")
-    total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
-    target       = frame_index if frame_index is not None else total_frames // 2
-    capture.set(cv2.CAP_PROP_POS_FRAMES, target)
-    success, frame = capture.read()
-    capture.release()
-    if not success:
-        raise RuntimeError(f"Could not read frame {target} from {video_file}")
-    return frame
-
-
-# =============================================================================
-# Main
-# =============================================================================
-
-def main() -> None:
-    global _server
-
-    parser = argparse.ArgumentParser(description="Interactive mask editor for TRex tracking regions.")
-    parser.add_argument("--project", required=True)
-    parser.add_argument("--video",   required=True)
-    parser.add_argument("--frame",   type=int, default=None)
-    parser.add_argument("--port",    type=int, default=8000)
-    args = parser.parse_args()
-
-    project_dir = Path(args.project).resolve()
-    if not project_dir.exists():
-        logger.error("Project directory not found: %s", project_dir)
-        sys.exit(1)
-
-    cfg             = yaml.safe_load((project_dir / "project.yaml").read_text())
-    meta_real_width = cfg.get("meta_real_width")
-    video_extension = cfg.get("video_extension", "MP4")
-
-    if meta_real_width is None:
-        logger.error("meta_real_width not set in project.yaml.")
-        sys.exit(1)
-
-    video_file = project_dir / "1_videos" / f"{args.video}.{video_extension}"
-    if not video_file.exists():
-        logger.error("Video not found: %s", video_file)
-        sys.exit(1)
-
-    masks_dir = project_dir / "masks"
-    masks_dir.mkdir(exist_ok=True)
-
-    APP_STATE["frame"]           = _extract_frame(video_file, args.frame)
-    APP_STATE["video_name"]      = args.video
-    APP_STATE["project_dir"]     = project_dir
-    APP_STATE["masks_dir"]       = masks_dir
-    APP_STATE["meta_real_width"] = meta_real_width
-
-    def open_browser():
-        time.sleep(1.2)
-        try:
-            subprocess.Popen(["xdg-open", f"http://localhost:{args.port}"],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except FileNotFoundError:
-            logger.info("Open your browser at: http://localhost:%d", args.port)
-
-    threading.Thread(target=open_browser, daemon=True).start()
-
-    config  = uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning")
-    _server = uvicorn.Server(config)
-    logger.info("Mask editor at http://localhost:%d  (Q in browser or Ctrl+C to quit)", args.port)
-    _server.run()
-
-
-if __name__ == "__main__":
-    main()

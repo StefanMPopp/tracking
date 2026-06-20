@@ -29,7 +29,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from _background import prepare_background_image
+from _background import background_image_path
 from _sweep import run_sweep
 
 logging.basicConfig(
@@ -253,12 +253,14 @@ def main() -> None:
     tuning_dir.mkdir(exist_ok=True)
 
     video_extension = effective_config.get("video_extension", "MP4")
-    prepare_background_image(
-        video_name=args.video,
-        video_extension=video_extension,
-        videos_dir=project_dir / "1_videos",
-        pv_dir=project_dir / "2_pv",
-    )
+    background_image_file = background_image_path(args.video, project_dir / "2_pv")
+    if not background_image_file.exists():
+        logger.info(
+            "No background image found for '%s'. TGrabs will compute one "
+            "automatically, or run: uv run python pipeline/background.py "
+            "--project %s --video %s",
+            args.video, args.project, args.video,
+        )
 
     # ==========================================================================
     # Sweep loop

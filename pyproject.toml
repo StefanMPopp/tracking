@@ -1,6 +1,6 @@
 [project]
 name = "tracking"
-version = "0.1.0"
+version = "0.3.0"
 description = "Insect video tracking pipeline"
 requires-python = ">=3.11"
 
@@ -11,4 +11,5 @@ dependencies = [
     "pyyaml>=6.0",
     "fastapi>=0.111",
     "uvicorn>=0.29",
+    "tqdm>=4.66",
 ]

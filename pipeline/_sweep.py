@@ -5,7 +5,7 @@ annotate frames with per-blob metrics, and save one clip per threshold.
 All outputs go directly into tuning_dir (passed by tune.py):
     tuning/
         tuning_log.json
-        pv/
+        2_pv/
             {video_name}.pv               ← overwritten each TGrabs run
             average_{video_name}.png      ← background image (if present)
         run_threshold_t{value}.settings   (one per threshold)
@@ -16,9 +16,9 @@ All outputs go directly into tuning_dir (passed by tune.py):
         {video_name}_t{value}.mp4         (one annotated clip per threshold)
 
 TRex byproducts cleaned up after each track run:
-    pv/{video_name}.results
-    pv/{video_name}.settings
-    pv/{video_name}.settings.backup
+    2_pv/{video_name}.results
+    2_pv/{video_name}.settings
+    2_pv/{video_name}.settings.backup
     csv_{video_name}_t{value}/{video_name}.results.meta
 """
 
@@ -73,6 +73,33 @@ def run_sweep(
     """
     thresholds             = effective_config["sweep_thresholds"]
     video_conversion_range = effective_config.get("video_conversion_range")  # None if not set
+    if video_conversion_range is None:
+        # Fall back to the value in default.settings so the annotated clip
+        # uses the same range that TGrabs will use.
+        from _settings import read_settings
+        default_settings = read_settings(base_settings_file)
+        raw = default_settings.get("video_conversion_range")
+        if raw:
+            import json
+            try:
+                video_conversion_range = json.loads(raw)
+            except (ValueError, TypeError):
+                pass
+
+    fps_hint = 30  # used only for the duration hint in the log; actual fps read from video later
+    if video_conversion_range is not None:
+        start_fr, end_fr = video_conversion_range
+        n_frames = end_fr - start_fr
+        logger.info(
+            "Frame range: %s → %d frames (%d–%d) (~%.1f s at %d fps)",
+            video_conversion_range, n_frames,
+            start_fr, end_fr, n_frames / fps_hint, fps_hint,
+        )
+    else:
+        logger.warning(
+            "video_conversion_range not set in project config or default.settings "
+            "— converting and rendering the full video."
+        )
     meta_real_width        = effective_config["meta_real_width"]
     track_max_individuals  = effective_config["track_max_individuals"]
     individual_prefix      = effective_config["individual_prefix"]
@@ -83,7 +110,7 @@ def run_sweep(
     if not video_file.exists():
         raise FileNotFoundError(f"Video not found: {video_file}")
 
-    pv_dir = tuning_dir / "pv"
+    pv_dir = tuning_dir / "2_pv"
     pv_dir.mkdir(parents=True, exist_ok=True)
 
     from _background import copy_background_to_sweep
@@ -327,20 +354,32 @@ def _render_annotated_clip(
         (frame_width, frame_height),
     )
 
-    colour_map   = _assign_individual_colours(trajectories_df)
-    speed_lookup = _compute_speeds(trajectories_df, fps, cm_per_pixel)
-    trail_lookup = _build_trail_lookup(trajectories_df)
+    colour_map      = _assign_individual_colours(trajectories_df)
+    speed_lookup    = _compute_speeds(trajectories_df, fps, cm_per_pixel)
+    trail_lookup    = _build_trail_lookup(trajectories_df)
     trail_window_us = int(trail_seconds * 1_000_000)
+    n_frames        = resolved_end_frame - start_frame
 
     capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-    for frame_index in range(start_frame, resolved_end_frame):
+    from tqdm import tqdm
+    for frame_index in tqdm(
+        range(start_frame, resolved_end_frame),
+        total=n_frames,
+        desc=f"  threshold={threshold}",
+        unit="fr",
+        dynamic_ncols=True,
+    ):
         success, frame = capture.read()
         if not success:
             break
 
+        # TRex numbers frames relative to video_conversion_range start (0-indexed),
+        # so subtract start_frame to look up the correct row in the CSV.
+        csv_frame_index = frame_index - start_frame
+
         frame = _annotate_frame(
             frame=frame,
-            frame_index=frame_index,
+            frame_index=csv_frame_index,
             trajectories_df=trajectories_df,
             speed_lookup=speed_lookup,
             trail_lookup=trail_lookup,
@@ -352,7 +391,7 @@ def _render_annotated_clip(
         cv2.rectangle(frame, (0, 0), (frame_width, 26), (30, 30, 30), -1)
         cv2.putText(
             frame,
-            f"threshold={threshold}  frame={frame_index}",
+            f"threshold={threshold}  frame={frame_index} (csv={csv_frame_index})",
             (6, 18), FONT, 0.5, COLOUR_TEXT, 1, cv2.LINE_AA,
         )
 

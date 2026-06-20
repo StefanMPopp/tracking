@@ -78,10 +78,57 @@ Record a short video of the empty arena before the experiment, named `{video_nam
 
 ---
 
+## Unified pipeline app (background + masks)
+
+A single browser-based app combines the background-image and mask-editing
+steps into tabs, so the video is loaded once and switching steps is instant.
+
+```bash
+uv run python pipeline/app.py \
+    --project /path/to/projects/pain_killers \
+    --video pain_test
+```
+
+Opens directly into the Background tab by default. Jump straight into a
+specific tab to skip a click:
+
+```bash
+uv run python pipeline/app.py --project ... --video pain_test --tab masks
+```
+
+Press `Q` in the browser or `Ctrl+C` in the terminal to close. More steps
+(tune, batch tracking) will be added as further tabs.
+
+### Background tab
+
+Generates `average_{video_name}.png` for TGrabs by combining `n_images`
+frames sampled between `start_time`/`end_time` (seconds) using `mean`,
+`median`, `max`, or `min`. If neither time bound is given, the first and
+last second are trimmed automatically (camera shake on record/stop).
+
+Click **Generate** to add a candidate to the comparison grid (up to 4 at
+once). Click a candidate to select it — its parameters populate the sidebar.
+`Del` removes the selected candidate from the grid (does not touch disk).
+A pre-existing `average_{video_name}.png`, if found on startup, is loaded
+into the grid automatically labelled **pre-existing**.
+
+`Ctrl+S` saves the selected candidate to `2_pv/average_{video_name}.png`;
+if a file is already there, you'll be asked to confirm overwriting it.
+Saved parameters that differ from the project-level defaults are recorded
+under `video_overrides.{video_name}.background_params` in `project.yaml`.
+
+### Masks tab
+
+Same interactive editor described below, embedded as a tab.
+
+---
+
 ## Creating masks (optional)
 
 Masks define include or ignore regions for TRex tracking. They are automatically
 applied during threshold sweeps and full tracking runs.
+
+Use the **Masks tab** in `app.py` (above), or run the standalone editor directly:
 
 ```bash
 uv run python pipeline/masks.py \
@@ -96,11 +143,13 @@ Opens a browser-based editor. Three ways to create shapes:
 - **Auto-detect**: set circle parameters in the sidebar and click Detect
 
 In Select mode (`S`): drag a shape to move it, drag a vertex to reshape it, drag
-the yellow rotation handle to rotate it. Right-click a vertex to delete it;
-right-click a shape body to delete the shape.
+the yellow rotation handle to rotate it (Shift+drag a corner/edge handle to
+resize while keeping aspect ratio). Ctrl+drag a shape to duplicate it.
+Right-click a vertex to delete it; right-click a shape body to delete the shape.
 
-Toggle mask type with `I` (include) / `G` (ignore). Press **Save all unsaved shapes**
-when done. Masks are saved to `masks/{video_name}_include_1.csv` etc.
+Toggle mask type with `I` (include) / `G` (ignore). `Ctrl+S` saves all unsaved
+shapes for the video; `Ctrl+Shift+S` saves the current shapes as project
+defaults. Masks are saved to `masks/{video_name}_include_1.csv` etc.
 
 **Project defaults**: shapes shared across videos. Load with "Load project defaults"
 (adds to current canvas); save with "Save current as defaults".
@@ -139,20 +188,25 @@ Sweep outputs are saved under `tuning/sweep_{timestamp}/`. A cumulative log of a
 ```
 tracking/
     pipeline/
-        tune.py                  ← threshold sweep CLI
-        new_project.py           ← creates folder and file scaffold for a new project (4_csv_video, tuning, etc.)
-        _sweep.py                ← TRex invocation, frame annotation, grid compositor
-        _background.py           ← background image extraction and copying
-        _settings.py             ← .settings file read/patch/write utilities
-        default.settings         ← shared TRex default settings (edit per project via project.yaml)
-        pipeline.yaml            ← machine-local config: conda env name, Miniforge path (gitignored)
-        pipeline.yaml.example    ← committed template for pipeline.yaml
+        app.py                    ← unified browser app: tabs for background, masks (more planned)
+        _tab_background.py        ← background-image tab: routes + HTML fragment
+        _tab_masks.py             ← masks tab: routes + embedded mask editor (iframe)
+        masks.py                  ← standalone mask editor (same functionality, own window)
+        tune.py                   ← threshold sweep CLI
+        new_project.py            ← creates folder and file scaffold for a new project (4_csv_video, tuning, etc.)
+        _sweep.py                 ← TRex invocation, frame annotation, grid compositor
+        _background.py            ← background image computation (mean/median/max/min over sampled frames)
+        _masks.py                 ← mask file I/O, TRex serialisation, circle auto-detection
+        _settings.py              ← .settings file read/patch/write utilities
+        default.settings          ← shared TRex default settings (edit per project via project.yaml)
+        pipeline.yaml             ← machine-local config: conda env name, Miniforge path (gitignored)
+        pipeline.yaml.example     ← committed template for pipeline.yaml
     project_template/
-        project.yaml             ← blank template with all keys documented; copied by new_project.py
-    install.sh                   ← installer and updater: clones or pulls, then provisions
-    setup.sh                     ← thin alias for install.sh; use from inside the repo
-    pyproject.toml               ← declares Python dependencies; used by uv to build the environment
-    uv.lock                      ← exact pinned versions of all dependencies; committed to the repo
+        project.yaml              ← blank template with all keys documented; copied by new_project.py
+    install.sh                    ← installer and updater: clones or pulls, then provisions
+    setup.sh                      ← thin alias for install.sh; use from inside the repo
+    pyproject.toml                ← declares Python dependencies; used by uv to build the environment
+    uv.lock                       ← exact pinned versions of all dependencies; committed to the repo
     .gitignore
     README.md
 ```
@@ -185,4 +239,6 @@ These defaults are correct for all machines including the dev machine. Edit only
 | `videos` | List of video names (without extension) |
 | `sweep_thresholds` | List of `detect_threshold` values to compare in `tune.py` |
 | `confirmed_detect_threshold` | Set automatically by `tune.py` after sweep review |
-| `video_overrides` | Per-video overrides for any project-level key; `video_conversion_range` goes here |
+| `background_params` | Default `method`/`n_images`/`start_time`/`end_time` for the background tab |
+| `auto_detect_circles` | Default circle-detection params for the masks tab |
+| `video_overrides` | Per-video overrides for any project-level key; `video_conversion_range`, `background_params`, etc. go here |
