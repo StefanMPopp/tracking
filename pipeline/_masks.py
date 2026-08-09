@@ -22,6 +22,7 @@ files are only written via explicit UI actions ("save as batch defaults" /
 "save as project defaults").
 """
 
+import base64
 import logging
 import math
 import re
@@ -335,6 +336,126 @@ def detect_circles(
     return polygons
 
 
+def detect_circles_debug(
+    frame: np.ndarray,
+    diameter_cm: float,
+    thickness_cm: float,
+    meta_real_width: float,
+    expected_count: int,
+    hue_center: int,
+    hue_tolerance: int,
+    saturation_min: int = 80,
+    value_max: int = 120,
+) -> dict:
+    """
+    Same detection pipeline as detect_circles, but returns every intermediate
+    stage and a per-contour breakdown of why each candidate was accepted or
+    rejected, for diagnosing "nothing detected" cases.
+
+    Returns a dict:
+        {
+            "colour_mask_image":   base64 PNG (raw HSV threshold result),
+            "cleaned_mask_image":  base64 PNG (after morphological close/open),
+            "contours_image":      base64 PNG (frame annotated with every
+                                    contour found, colour-coded green=accepted,
+                                    red=rejected, with reason + measured
+                                    area/circularity as text),
+            "ideal_area":          float,
+            "area_min":            float,
+            "area_max":            float,
+            "contour_details":     [
+                {"area": float, "circularity": float, "accepted": bool,
+                 "reason": str}, ...
+            ],
+        }
+    """
+    frame_width  = frame.shape[1]
+    px_per_cm    = frame_width / meta_real_width
+
+    outer_radius_px = (diameter_cm / 2.0) * px_per_cm
+    thickness_px    = thickness_cm * px_per_cm
+    inner_radius_px = outer_radius_px - thickness_px
+
+    ideal_area = math.pi * (outer_radius_px ** 2 - inner_radius_px ** 2)
+    area_min   = ideal_area * 0.5
+    area_max   = ideal_area * 2.0
+
+    # --- Colour mask (HSV) — identical logic to detect_circles ---
+    hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    lower_hue = (hue_center - hue_tolerance) % 180
+    upper_hue = (hue_center + hue_tolerance) % 180
+
+    if lower_hue <= upper_hue:
+        colour_mask = cv2.inRange(
+            hsv_frame, (lower_hue, saturation_min, 0), (upper_hue, 255, value_max),
+        )
+    else:
+        mask_low  = cv2.inRange(hsv_frame, (lower_hue, saturation_min, 0), (179, 255, value_max))
+        mask_high = cv2.inRange(hsv_frame, (0, saturation_min, 0), (upper_hue, 255, value_max))
+        colour_mask = cv2.bitwise_or(mask_low, mask_high)
+
+    colour_mask_image = cv2.cvtColor(colour_mask, cv2.COLOR_GRAY2BGR)
+
+    # --- Morphological cleanup ---
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    cleaned_mask = cv2.morphologyEx(colour_mask, cv2.MORPH_CLOSE, kernel)
+    cleaned_mask = cv2.morphologyEx(cleaned_mask, cv2.MORPH_OPEN,  kernel)
+    cleaned_mask_image = cv2.cvtColor(cleaned_mask, cv2.COLOR_GRAY2BGR)
+
+    # --- Find contours and classify each one ---
+    contours, _ = cv2.findContours(
+        cleaned_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    contours_image = frame.copy()
+    contour_details = []
+
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        perimeter = cv2.arcLength(contour, True)
+        circularity = (4 * math.pi * area / (perimeter ** 2)) if perimeter > 0 else 0.0
+
+        if not (area_min <= area <= area_max):
+            accepted = False
+            reason = f"area {area:.0f} outside [{area_min:.0f}, {area_max:.0f}]"
+        elif circularity < 0.5:
+            accepted = False
+            reason = f"circularity {circularity:.2f} < 0.5"
+        else:
+            accepted = True
+            reason = "accepted"
+
+        contour_details.append({
+            "area": float(area),
+            "circularity": float(circularity),
+            "accepted": accepted,
+            "reason": reason,
+        })
+
+        colour = (50, 220, 50) if accepted else (50, 50, 220)
+        cv2.drawContours(contours_image, [contour], -1, colour, 2)
+
+        moments = cv2.moments(contour)
+        if moments["m00"] != 0:
+            label_x = int(moments["m10"] / moments["m00"])
+            label_y = int(moments["m01"] / moments["m00"])
+            label = f"a={area:.0f} c={circularity:.2f}"
+            cv2.putText(
+                contours_image, label, (label_x - 40, label_y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA,
+            )
+
+    return {
+        "colour_mask_image":  _encode_image_b64(colour_mask_image),
+        "cleaned_mask_image": _encode_image_b64(cleaned_mask_image),
+        "contours_image":     _encode_image_b64(contours_image),
+        "ideal_area":         float(ideal_area),
+        "area_min":           float(area_min),
+        "area_max":           float(area_max),
+        "contour_details":    contour_details,
+    }
+
+
 # =============================================================================
 # Helpers
 # =============================================================================
@@ -379,3 +500,9 @@ def _circle_to_polygon(cx: float, cy: float, radius: float, n_vertices: int) -> 
         ]
         for i in range(n_vertices)
     ]
+
+
+def _encode_image_b64(image: np.ndarray) -> str:
+    """Encode a BGR image as a base64 PNG string for embedding in JSON."""
+    _, buffer = cv2.imencode(".png", image)
+    return base64.b64encode(buffer).decode("utf-8")

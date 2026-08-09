@@ -164,6 +164,24 @@ def register_masks_routes(app: FastAPI, state: dict) -> None:
         )
         return JSONResponse({"polygons": polygons, "count": len(polygons)})
 
+    @app.post("/masks-frame/masks/detect-debug")
+    def run_detection_debug(request: DetectRequest):
+        """
+        Same parameters as /masks/detect, but returns the intermediate HSV
+        mask, the post-cleanup mask, and an annotated contours image showing
+        why each candidate blob was accepted or rejected — for diagnosing
+        "nothing detected" cases.
+        """
+        from _masks import detect_circles_debug
+        frame  = state["display_frame"]
+        result = detect_circles_debug(
+            frame=frame, diameter_cm=request.diameter_cm, thickness_cm=request.thickness_cm,
+            meta_real_width=state["meta_real_width"], expected_count=request.expected_count,
+            hue_center=request.hue_center, hue_tolerance=request.hue_tolerance,
+            saturation_min=request.saturation_min, value_max=request.value_max,
+        )
+        return JSONResponse(result)
+
     @app.get("/masks-frame/project/auto-detect-params")
     def get_auto_detect_params():
         cfg = yaml.safe_load(state["project_yaml_file"].read_text())
@@ -256,9 +274,8 @@ input[type=color] {{
                         cursor: pointer; font-size: 13px; width: auto; padding: 0 4px; }}
 #type-bar {{ display: flex; gap: 6px; }}
 #type-bar button {{ flex: 1; }}
-#canvas-wrap {{ flex: 1; display: flex; align-items: center;
-                justify-content: center; overflow: hidden; }}
-canvas {{ display: block; }}
+#canvas-wrap {{ flex: 1; overflow: auto; padding: 10px; }}
+canvas {{ display: block; margin: auto; }}
 #shutdown-overlay {{ display: none; position: fixed; inset: 0;
   background: rgba(0,0,0,0.75); align-items: center;
   justify-content: center; z-index: 100; }}
@@ -269,6 +286,24 @@ canvas {{ display: block; }}
 #shutdown-box p  {{ color: #ccc; font-size: 13px; margin-bottom: 20px; }}
 .btn-row {{ display: flex; gap: 10px; justify-content: center; }}
 .btn-row button {{ width: auto; padding: 8px 20px; }}
+#debug-overlay {{ display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.9); align-items: center;
+  justify-content: center; z-index: 110; overflow-y: auto; padding: 20px; }}
+#debug-overlay.visible {{ display: flex; }}
+#debug-box {{ background: #16213e; border: 1px solid #a0c4ff; border-radius: 10px;
+  padding: 20px; max-width: 95vw; max-height: 95vh; overflow-y: auto; }}
+#debug-box h3 {{ color: #a0c4ff; margin-bottom: 12px; }}
+#debug-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }}
+.debug-cell {{ background: #000; border-radius: 6px; overflow: hidden; }}
+.debug-cell img {{ width: 100%; display: block; }}
+.debug-cell-label {{ font-size: 11px; color: #7ec8e3; padding: 4px 8px; background: #0f3460; }}
+#debug-legend {{ font-size: 11px; color: #ccc; margin-bottom: 10px; line-height: 1.6; }}
+#debug-contour-table {{ width: 100%; font-size: 11px; border-collapse: collapse; margin-bottom: 14px; }}
+#debug-contour-table th, #debug-contour-table td {{ padding: 4px 8px; text-align: left;
+  border-bottom: 1px solid #0f3460; }}
+#debug-contour-table th {{ color: #7ec8e3; }}
+.debug-accepted {{ color: #50dc50; }}
+.debug-rejected {{ color: #dc5050; }}
 </style>
 </head>
 <body>
@@ -276,6 +311,11 @@ canvas {{ display: block; }}
 <div id="sidebar">
   <h2>Mask Editor</h2>
   <div id="status">Loading…</div>
+  <div style="display:flex; align-items:center; gap:6px; font-size:11px; color:#7ec8e3;">
+    <span>Zoom: <span id="zoom-level-label">100%</span></span>
+    <button class="btn-neutral" style="width:auto; padding:2px 8px;" onclick="resetZoom()">Reset</button>
+    <span style="color:#5a7a99;">(Ctrl+scroll to zoom)</span>
+  </div>
 
   <div class="section">
     <h3>Draw mode</h3>
@@ -312,6 +352,7 @@ canvas {{ display: block; }}
       <input type="range" id="det-brightness" min="20" max="200" value="120">
       <span id="det-brightness-val" style="font-size:11px">120</span></div>
     <button class="btn-detect"  onclick="runDetect()">🔍 Detect</button>
+    <button class="btn-neutral" style="margin-top:5px" onclick="runDetectDebug()">🩺 Debug detection</button>
     <button class="btn-neutral" style="margin-top:5px" onclick="saveDetectParams()">💾 Save params to project</button>
   </div>
 
@@ -352,6 +393,29 @@ canvas {{ display: block; }}
       <button class="btn-include" id="btn-save-close" onclick="saveAndClose()">💾 Save &amp; close</button>
       <button class="btn-ignore"  onclick="closeNow()">✖ Close without saving</button>
       <button class="btn-neutral" onclick="cancelClose()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="debug-overlay">
+  <div id="debug-box">
+    <h3>🩺 Detection debug</h3>
+    <div id="debug-legend">
+      <strong>Reading this:</strong> the colour mask shows every pixel that passed the hue/saturation/brightness
+      test — gaps or holes here mean lighting unevenness knocked those pixels out of range.
+      The cleaned mask shows the same after morphological closing/opening tries to patch small gaps.
+      The contours image draws every blob OpenCV found on the cleaned mask:
+      <span class="debug-accepted">green = accepted</span>,
+      <span class="debug-rejected">red = rejected</span> (with its measured area/circularity labelled).
+      Expected area range for your current parameters: <span id="debug-area-range"></span>.
+    </div>
+    <div id="debug-grid"></div>
+    <table id="debug-contour-table">
+      <thead><tr><th>#</th><th>Area</th><th>Circularity</th><th>Result</th></tr></thead>
+      <tbody id="debug-contour-rows"></tbody>
+    </table>
+    <div class="btn-row">
+      <button class="btn-neutral" onclick="closeDebugOverlay()">Close</button>
     </div>
   </div>
 </div>
@@ -399,7 +463,13 @@ let rotStartAngle   = null;
 
 let canvas, ctx, img;
 let displayScale = 1;
+let baseFitScale  = 1;   // the "fit to wrap" scale before zoom is applied
+let zoomFactor    = 1;   // multiplier on top of baseFitScale, via Ctrl+wheel
 let nativeW, nativeH;
+
+const ZOOM_MIN = 0.25;
+const ZOOM_MAX = 6;
+const ZOOM_STEP = 0.1;
 
 // ============================================================
 // Init
@@ -413,6 +483,7 @@ window.onload = async () => {{
   canvas.addEventListener("mouseup",     onMouseUp);
   canvas.addEventListener("dblclick",    onDblClick);
   canvas.addEventListener("contextmenu", onRightClick);
+  document.getElementById("canvas-wrap").addEventListener("wheel", onCanvasWheel, {{passive: false}});
 
   setMode("perimeter");
   setMaskType("include");
@@ -456,11 +527,47 @@ async function loadFrame() {{
 function resizeCanvas() {{
   const wrap = document.getElementById("canvas-wrap");
   const maxW = wrap.clientWidth - 10, maxH = wrap.clientHeight - 10;
-  displayScale  = Math.min(maxW / nativeW, maxH / nativeH, 1);
+  baseFitScale  = Math.min(maxW / nativeW, maxH / nativeH, 1);
+  displayScale  = baseFitScale * zoomFactor;
   canvas.width  = Math.round(nativeW * displayScale);
   canvas.height = Math.round(nativeH * displayScale);
   canvas.style.cursor = (mode === "select") ? "default" : "crosshair";
   redraw();
+}}
+
+function onCanvasWheel(e) {{
+  if (!e.ctrlKey) return;   // only intercept Ctrl+wheel; let normal scroll pass through
+  e.preventDefault();
+
+  const wrap = document.getElementById("canvas-wrap");
+  const rectBefore = canvas.getBoundingClientRect();
+  // Cursor position relative to the canvas, in pre-zoom canvas pixels
+  const cursorX = e.clientX - rectBefore.left;
+  const cursorY = e.clientY - rectBefore.top;
+  // Same position in native (unscaled) image coordinates — stays fixed under the cursor
+  const [nativeX, nativeY] = toNative(cursorX, cursorY);
+
+  const delta = e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP;
+  zoomFactor = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoomFactor + delta));
+
+  resizeCanvas();
+  updateZoomLabel();
+
+  // Re-scroll the wrap so the same native point stays under the cursor
+  const [newCursorX, newCursorY] = toDisplay(nativeX, nativeY);
+  wrap.scrollLeft += (newCursorX - cursorX);
+  wrap.scrollTop  += (newCursorY - cursorY);
+}}
+
+function updateZoomLabel() {{
+  document.getElementById("zoom-level-label").textContent =
+    Math.round(zoomFactor * 100) + "%";
+}}
+
+function resetZoom() {{
+  zoomFactor = 1;
+  resizeCanvas();
+  updateZoomLabel();
 }}
 
 async function loadExistingMasks() {{
@@ -729,9 +836,9 @@ function onMouseMove(e) {{
       const movesTop   = [0,1,4].includes(dragBbHandle);
       const movesBott  = [2,3,6].includes(dragBbHandle);
 
-      if (movesRight)  newW = Math.max(4, ox + ow + (nx2-(ox+ow)));
+      if (movesRight)  newW = Math.max(4, nx2 - ox);
       if (movesLeft)  {{ newX = Math.min(nx2, ox+ow-4); newW = ow + (ox-newX); }}
-      if (movesBott)   newH = Math.max(4, oy + oh + (ny2-(oy+oh)));
+      if (movesBott)   newH = Math.max(4, ny2 - oy);
       if (movesTop)   {{ newY = Math.min(ny2, oy+oh-4); newH = oh + (oy-newY); }}
 
       // Shift+drag: preserve aspect ratio
@@ -835,8 +942,14 @@ document.addEventListener("keydown", e => {{
     e.preventDefault(); saveAll(); return;
   }}
 
+  if (e.key==="Enter" && document.getElementById("shutdown-overlay").classList.contains("visible")) {{
+    closeNow(); return;
+  }}
   if (e.key==="Enter"&&mode==="perimeter"&&perimeterVerts.length>=3) closePerimeter();
-  if (e.key==="Escape") {{ perimeterVerts=[]; dragStart=dragCurrent=null; dragOp=null; redraw(); }}
+  if (e.key==="Escape") {{
+    document.getElementById("debug-overlay").classList.remove("visible");
+    perimeterVerts=[]; dragStart=dragCurrent=null; dragOp=null; redraw();
+  }}
   if (e.key==="s"||e.key==="S") setMode("select");
   if (e.key==="p"||e.key==="P") setMode("perimeter");
   if (e.key==="r"||e.key==="R") setMode("rectangle");
@@ -1020,6 +1133,67 @@ async function runDetect() {{
   const d=await res.json();
   d.polygons.forEach(verts=>addShape(verts,maskType,null,true));
   setStatus(`Detection complete: ${{d.count}} circle(s) found.`);
+}}
+
+async function runDetectDebug() {{
+  setStatus("Running detection debug…");
+  const hsvColor=hexToHsv(document.getElementById("det-color").value);
+  const body={{
+    diameter_cm:    parseFloat(document.getElementById("det-diameter").value),
+    thickness_cm:   parseFloat(document.getElementById("det-thickness").value),
+    expected_count: parseInt(document.getElementById("det-count").value),
+    hue_center:     hsvColor.h,
+    hue_tolerance:  parseInt(document.getElementById("det-hue-tol").value),
+    saturation_min: 80,
+    value_max:      parseInt(document.getElementById("det-brightness").value),
+  }};
+  const res=await fetch("/masks-frame/masks/detect-debug",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(body)}});
+  const d=await res.json();
+
+  document.getElementById("debug-area-range").textContent =
+    `${{d.area_min.toFixed(0)}}–${{d.area_max.toFixed(0)}} px² (ideal: ${{d.ideal_area.toFixed(0)}} px²)`;
+
+  const grid = document.getElementById("debug-grid");
+  grid.innerHTML = "";
+  const stages = [
+    ["1. Colour mask (HSV threshold)", d.colour_mask_image],
+    ["2. Cleaned mask (after morphology)", d.cleaned_mask_image],
+    ["3. Contours found (green=accepted, red=rejected)", d.contours_image],
+  ];
+  stages.forEach(([label, imageB64]) => {{
+    const cell = document.createElement("div");
+    cell.className = "debug-cell";
+    const labelDiv = document.createElement("div");
+    labelDiv.className = "debug-cell-label";
+    labelDiv.textContent = label;
+    const img = document.createElement("img");
+    img.src = "data:image/png;base64," + imageB64;
+    cell.appendChild(labelDiv);
+    cell.appendChild(img);
+    grid.appendChild(cell);
+  }});
+
+  const rows = document.getElementById("debug-contour-rows");
+  rows.innerHTML = "";
+  if (d.contour_details.length === 0) {{
+    rows.innerHTML = '<tr><td colspan="4" style="color:#dc5050;">No contours found at all — ' +
+      'the colour mask is likely empty. Try widening hue tolerance or raising max brightness.</td></tr>';
+  }} else {{
+    d.contour_details.forEach((c, i) => {{
+      const row = document.createElement("tr");
+      const resultClass = c.accepted ? "debug-accepted" : "debug-rejected";
+      row.innerHTML = `<td>${{i+1}}</td><td>${{c.area.toFixed(0)}}</td>` +
+        `<td>${{c.circularity.toFixed(2)}}</td><td class="${{resultClass}}">${{c.reason}}</td>`;
+      rows.appendChild(row);
+    }});
+  }}
+
+  document.getElementById("debug-overlay").classList.add("visible");
+  setStatus(`Debug complete: ${{d.contour_details.length}} contour(s) examined.`);
+}}
+
+function closeDebugOverlay() {{
+  document.getElementById("debug-overlay").classList.remove("visible");
 }}
 
 async function saveDetectParams() {{

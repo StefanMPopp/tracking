@@ -383,6 +383,10 @@ def build_background_tab_html(video_name: str) -> str:
 
   window.bgInit = async function() {{
     document.getElementById("bg-video-viewer").src = "/background/video-file";
+    enableCellZoom(
+      document.getElementById("bg-video-cell"),
+      document.getElementById("bg-video-viewer"),
+    );
     await bgLoadInfo();
     await bgLoadParams();
   }};
@@ -463,6 +467,7 @@ def build_background_tab_html(video_name: str) -> str:
       img.src = "data:image/png;base64," + c.image;
       img.style.maxWidth = "100%"; img.style.maxHeight = "100%"; img.style.objectFit = "contain";
       cell.appendChild(img);
+      enableCellZoom(cell, img);
 
       if (c.isPreExisting) {{
         const label = document.createElement("span");
@@ -522,6 +527,34 @@ def build_background_tab_html(video_name: str) -> str:
     document.getElementById("bg-overwrite-overlay").style.display = "none";
     bgPendingSave = null;
   }};
+
+  // ============================================================
+  // Ctrl+wheel zoom — applies to any cell containing an <img> or <video>.
+  // Per-cell state stored on the element itself so each grid cell zooms
+  // independently. Scroll without Ctrl is left untouched (page/grid scroll).
+  // ============================================================
+  function enableCellZoom(cell, media) {{
+    let zoom = 1, panX = 0, panY = 0;
+    const ZOOM_MIN = 1, ZOOM_MAX = 6, ZOOM_STEP = 0.1;
+
+    cell.addEventListener("wheel", (e) => {{
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP;
+      const newZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom + delta));
+      if (newZoom === zoom) return;
+      zoom = newZoom;
+      if (zoom === 1) {{ panX = 0; panY = 0; }}   // reset pan when back at 1x
+      media.style.transform = `scale(${{zoom}}) translate(${{panX}}px, ${{panY}}px)`;
+      media.style.transformOrigin = "center center";
+    }}, {{passive: false}});
+
+    // Double-click resets zoom for that cell
+    cell.addEventListener("dblclick", () => {{
+      zoom = 1; panX = 0; panY = 0;
+      media.style.transform = "none";
+    }});
+  }}
 
   function bgSetStatus(msg) {{ document.getElementById("bg-status").textContent = msg; }}
 

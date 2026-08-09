@@ -8,7 +8,7 @@ All outputs go directly into tuning_dir (passed by tune.py):
         2_pv/
             {video_name}.pv               ← overwritten each TGrabs run
             average_{video_name}.png      ← background image (if present)
-        run_threshold_t{value}.settings   (one per threshold)
+        {video_name}_thresh{value}.settings   (one per threshold)
         csv_{video_name}_t{value}/        (one per threshold)
             {video_name}_0.csv
             {video_name}_1.csv
@@ -23,7 +23,9 @@ TRex byproducts cleaned up after each track run:
 """
 
 import logging
+import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 import cv2
@@ -33,6 +35,34 @@ import pandas as pd
 from _settings import patch_settings
 
 logger = logging.getLogger(__name__)
+
+# Cooperative cancellation for a running sweep. A sweep checks this event
+# between thresholds (and the subprocess helpers register the currently
+# running Popen handle so it can be terminated immediately rather than
+# waiting for the whole sweep loop to notice). Set via request_sweep_stop(),
+# called from both the Tune tab's Stop button and a SIGINT handler.
+_stop_event = threading.Event()
+_current_process: subprocess.Popen | None = None
+_current_process_lock = threading.Lock()
+
+
+def request_sweep_stop() -> None:
+    """
+    Request cancellation of any currently running sweep. Sets the stop
+    flag (checked between thresholds) and terminates the in-flight
+    TGrabs/TRex subprocess, if any, so a single long threshold doesn't
+    have to finish before the sweep actually stops.
+    """
+    _stop_event.set()
+    with _current_process_lock:
+        if _current_process is not None and _current_process.poll() is None:
+            logger.info("Terminating in-flight subprocess (pid=%d)…", _current_process.pid)
+            _current_process.terminate()
+
+
+def _clear_sweep_stop() -> None:
+    """Reset the stop flag at the start of a new sweep."""
+    _stop_event.clear()
 
 # Annotation colours (BGR)
 # INDIVIDUAL_COLOURS cycles over individual IDs; chosen to be visually distinct
@@ -60,6 +90,8 @@ FONT_THICKNESS = 1
 def run_sweep(
     video_name: str,
     project_dir: Path,
+    videos_dir: Path,
+    masks_dir: Path,
     tuning_dir: Path,
     base_settings_file: Path,
     pipeline_config: dict,
@@ -70,14 +102,26 @@ def run_sweep(
     Run TGrabs + TRex for each threshold in effective_config["sweep_thresholds"]
     and render one annotated clip per threshold into tuning_dir.
 
+    videos_dir is the folder containing the source video — pass project_dir /
+    "1_videos" for a real trial video, or the tuning-mode videos folder
+    (e.g. project_dir / "tuning" / "1_videos") for a dedicated tuning clip.
+
+    masks_dir is resolved the same way: project-level masks/ for real videos,
+    or tuning/masks/ for dedicated tuning clips (which are not part of any
+    batch and are not expected to share masks with real trial videos).
+
     project_config (the raw, unresolved project.yaml contents) is needed
     separately from effective_config to resolve which batch (if any) this
     video belongs to, for mask resolution.
 
     Returns a list of produced clip file paths.
     """
+    _clear_sweep_stop()
+
     thresholds             = effective_config["sweep_thresholds"]
     video_conversion_range = effective_config.get("video_conversion_range")  # None if not set
+    animal_size_min        = effective_config.get("animal_size_min")
+    animal_size_max        = effective_config.get("animal_size_max")
     if video_conversion_range is None:
         # Fall back to the value in default.settings so the annotated clip
         # uses the same range that TGrabs will use.
@@ -110,7 +154,6 @@ def run_sweep(
     individual_prefix      = effective_config["individual_prefix"]
     video_extension        = effective_config.get("video_extension", "MP4")
 
-    videos_dir = project_dir / "1_videos"
     video_file = videos_dir / f"{video_name}.{video_extension}"
     if not video_file.exists():
         raise FileNotFoundError(f"Video not found: {video_file}")
@@ -127,13 +170,19 @@ def run_sweep(
 
     # --------------------------------------------------------------------------
     clip_files = []
+    was_cancelled = False
 
     for threshold in thresholds:
+        if _stop_event.is_set():
+            logger.info("Sweep stopped by user request — skipping remaining thresholds.")
+            was_cancelled = True
+            break
+
         logger.info("=" * 50)
         logger.info("Threshold %d", threshold)
         logger.info("=" * 50)
 
-        settings_file = tuning_dir / f"run_threshold_t{threshold:03d}.settings"
+        settings_file = tuning_dir / f"{video_name}_thresh{threshold:03d}.settings"
         csv_dir       = tuning_dir / f"csv_{video_name}_t{threshold:03d}"
         csv_dir.mkdir(parents=True, exist_ok=True)
 
@@ -146,9 +195,49 @@ def run_sweep(
         if video_conversion_range is not None:
             overrides["video_conversion_range"] = video_conversion_range
 
+        if animal_size_min is not None or animal_size_max is not None:
+            resolved_min, resolved_max = animal_size_min, animal_size_max
+            if resolved_min is None or resolved_max is None:
+                # Only one side was given — read the missing side from
+                # default.settings' existing detect_size_filter so we don't
+                # silently drop the override entirely.
+                from _settings import read_settings
+                import json
+                default_settings = read_settings(base_settings_file)
+                raw = default_settings.get("detect_size_filter")
+                default_min, default_max = None, None
+                if raw:
+                    try:
+                        parsed = json.loads(raw)
+                        if parsed and isinstance(parsed[0], list) and len(parsed[0]) == 2:
+                            default_min, default_max = parsed[0]
+                    except (ValueError, TypeError, IndexError):
+                        pass
+                if resolved_min is None:
+                    resolved_min = default_min
+                if resolved_max is None:
+                    resolved_max = default_max
+                logger.info(
+                    "Only one animal size bound given (min=%s, max=%s) — "
+                    "filling the other from default.settings: min=%s, max=%s",
+                    animal_size_min, animal_size_max, resolved_min, resolved_max,
+                )
+
+            if resolved_min is not None and resolved_max is not None:
+                size_filter_value = [[resolved_min, resolved_max]]
+                overrides["detect_size_filter"] = size_filter_value
+                overrides["track_size_filter"]  = size_filter_value
+            else:
+                logger.warning(
+                    "Could not resolve a complete animal size range (min=%s, "
+                    "max=%s) — detect_size_filter/track_size_filter left at "
+                    "default.settings value.",
+                    resolved_min, resolved_max,
+                )
+
         # Apply masks if present for this video (video → batch → default)
         from _masks import load_resolved_masks, masks_to_trex_string
-        masks       = load_resolved_masks(video_name, project_config, project_dir / "masks")
+        masks       = load_resolved_masks(video_name, project_config, masks_dir)
         has_include = bool(masks["include"])
         has_ignore  = bool(masks["ignore"])
         if has_include and has_ignore:
@@ -168,30 +257,35 @@ def run_sweep(
             overrides=overrides,
         )
 
-        _run_tgrabs(
-            video_file=video_file,
-            settings_file=settings_file,
-            video_name=video_name,
-            pv_dir=pv_dir,
-            pipeline_config=pipeline_config,
-            video_conversion_range=video_conversion_range,
-            detect_threshold=threshold,
-        )
-
-        pv_file = pv_dir / f"{video_name}.pv"
-        if not pv_file.exists():
-            logger.warning(
-                "TGrabs did not produce a .pv file for threshold=%d — skipping.", threshold
+        try:
+            _run_tgrabs(
+                video_file=video_file,
+                settings_file=settings_file,
+                video_name=video_name,
+                pv_dir=pv_dir,
+                pipeline_config=pipeline_config,
+                video_conversion_range=video_conversion_range,
+                detect_threshold=threshold,
             )
-            continue
 
-        _run_trex(
-            pv_file=pv_file,
-            settings_file=settings_file,
-            video_name=video_name,
-            csv_dir=csv_dir,
-            pipeline_config=pipeline_config,
-        )
+            pv_file = pv_dir / f"{video_name}.pv"
+            if not pv_file.exists():
+                logger.warning(
+                    "TGrabs did not produce a .pv file for threshold=%d — skipping.", threshold
+                )
+                continue
+
+            _run_trex(
+                pv_file=pv_file,
+                settings_file=settings_file,
+                video_name=video_name,
+                csv_dir=csv_dir,
+                pipeline_config=pipeline_config,
+            )
+        except SweepCancelled:
+            logger.info("Sweep stopped by user request mid-threshold (threshold=%d).", threshold)
+            was_cancelled = True
+            break
 
         _promote_csvs(csv_dir=csv_dir, video_name=video_name)
         _cleanup_trex_byproducts(pv_dir=pv_dir, csv_dir=csv_dir, video_name=video_name)
@@ -209,6 +303,11 @@ def run_sweep(
         )
         clip_files.append(clip_file)
 
+    if was_cancelled:
+        logger.info(
+            "Sweep cancelled. %d clip(s) completed before stopping.", len(clip_files)
+        )
+    _clear_sweep_stop()
     return clip_files
 
 
@@ -223,6 +322,36 @@ def _conda_prefix(pipeline_config: dict) -> str:
         f"source {miniforge_dir}/etc/profile.d/conda.sh && "
         f"conda activate {conda_env}"
     )
+
+
+class SweepCancelled(Exception):
+    """Raised when a sweep is stopped via request_sweep_stop()."""
+
+
+def _run_subprocess_cancellable(command: str) -> None:
+    """
+    Run a shell command, registering it as the current cancellable process
+    so request_sweep_stop() can terminate it immediately. Raises
+    SweepCancelled if the process was terminated due to a stop request
+    (rather than failing on its own), or subprocess.CalledProcessError for
+    a genuine failure.
+    """
+    global _current_process
+
+    process = subprocess.Popen(["bash", "-c", command])
+    with _current_process_lock:
+        _current_process = process
+
+    return_code = process.wait()
+
+    with _current_process_lock:
+        if _current_process is process:
+            _current_process = None
+
+    if return_code != 0:
+        if _stop_event.is_set():
+            raise SweepCancelled("Sweep stopped by user request.")
+        raise subprocess.CalledProcessError(return_code, command)
 
 
 def _run_tgrabs(
@@ -250,7 +379,7 @@ def _run_tgrabs(
         f'-d "{pv_dir}"'
     )
     logger.info("TGrabs: %s", command)
-    subprocess.run(["bash", "-c", command], check=True)
+    _run_subprocess_cancellable(command)
 
 
 def _run_trex(
@@ -269,7 +398,7 @@ def _run_trex(
         f'-output_dir "{csv_dir}"'
     )
     logger.info("TRex: %s", command)
-    subprocess.run(["bash", "-c", command], check=True)
+    _run_subprocess_cancellable(command)
 
 
 def _promote_csvs(csv_dir: Path, video_name: str) -> None:
@@ -352,6 +481,9 @@ def _render_annotated_clip(
     raw_end_frame      = video_conversion_range[1] if video_conversion_range is not None else -1
     resolved_end_frame = total_frames if raw_end_frame == -1 else raw_end_frame
 
+    # OpenCV's avc1 (H.264) writer support is inconsistent across builds —
+    # write with mp4v (broadly supported) and re-encode to H.264 via FFmpeg
+    # afterward, since browsers require H.264 for native <video> playback.
     writer = cv2.VideoWriter(
         str(output_file),
         cv2.VideoWriter_fourcc(*"mp4v"),
@@ -404,7 +536,59 @@ def _render_annotated_clip(
 
     capture.release()
     writer.release()
-    logger.info("Annotated clip: %s", output_file)
+    logger.info("Annotated clip (mp4v): %s", output_file)
+
+    _reencode_for_browser_playback(output_file)
+
+
+# Module-level flag so the "FFmpeg not found" warning is logged once per
+# process, not once per threshold during a sweep.
+_FFMPEG_MISSING_WARNED = False
+
+
+def _reencode_for_browser_playback(video_file: Path) -> None:
+    """
+    Re-encode an OpenCV-written (mp4v) clip to H.264 in place via FFmpeg,
+    so it plays natively in browser <video> elements (Tune tab grid,
+    Background tab viewer). If FFmpeg is not installed, the clip is left
+    as mp4v — it still opens fine in VLC/desktop players, just not in-browser.
+    """
+    global _FFMPEG_MISSING_WARNED
+
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path is None:
+        if not _FFMPEG_MISSING_WARNED:
+            logger.warning(
+                "ffmpeg not found on PATH — clips will remain mp4v and will "
+                "NOT play in the browser (Tune tab grid, Background tab "
+                "viewer), though they still open fine in VLC/desktop players. "
+                "Install ffmpeg (e.g. 'conda install ffmpeg' or "
+                "'sudo apt install ffmpeg') to enable in-browser playback."
+            )
+            _FFMPEG_MISSING_WARNED = True
+        return
+
+    temp_file = video_file.with_suffix(".h264.mp4")
+    command = [
+        ffmpeg_path, "-y",
+        "-i", str(video_file),
+        "-vcodec", "libx264",
+        "-crf", "23",
+        "-pix_fmt", "yuv420p",   # ensures broad browser compatibility
+        "-loglevel", "error",
+        str(temp_file),
+    ]
+    try:
+        subprocess.run(command, check=True)
+        temp_file.replace(video_file)
+        logger.info("Re-encoded to H.264 for browser playback: %s", video_file.name)
+    except subprocess.CalledProcessError as error:
+        logger.warning(
+            "FFmpeg re-encode failed for %s (%s). Clip remains mp4v — "
+            "playable in VLC/desktop players but not in-browser.",
+            video_file.name, error,
+        )
+        temp_file.unlink(missing_ok=True)
 
 
 def _load_trajectories(csv_files: list[Path]) -> pd.DataFrame:

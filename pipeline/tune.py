@@ -263,6 +263,8 @@ def main() -> None:
         clip_files = run_sweep(
             video_name=args.video,
             project_dir=project_dir,
+            videos_dir=project_dir / "1_videos",
+            masks_dir=project_dir / "masks",
             tuning_dir=tuning_dir,
             base_settings_file=BASE_SETTINGS_FILE,
             pipeline_config=pipeline_config,
