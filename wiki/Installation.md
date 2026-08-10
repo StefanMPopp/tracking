@@ -38,11 +38,40 @@ cd ~/tracking
 chmod +x new_project.py "New Project.command" "New Project.desktop"
 ```
 
-- **Linux** — double-click `New Project.desktop`. Some desktop environments ask
-  you to confirm the first time ("Trust and Launch").
 - **macOS** — double-click `New Project.command`. Gatekeeper may block it the
   first time; right-click → Open to allow it.
+- **Linux** — see below; a plain double-click often silently does nothing even
+  with the exec bit set.
 - **Any platform** — `python3 new_project.py` always works.
+
+### Linux: if double-clicking does nothing
+
+GNOME (and some other desktop environments) refuse to run `.desktop` files
+from arbitrary folders even when they're executable, as a security measure —
+no error is shown, it just does nothing. The reliable fix is to install the
+launcher into the standard applications directory, which is auto-trusted and
+also makes it searchable from the app grid:
+
+```bash
+mkdir -p ~/.local/share/applications
+cp ~/tracking/"New Project.desktop" ~/.local/share/applications/tracking-new-project.desktop
+chmod +x ~/.local/share/applications/tracking-new-project.desktop
+```
+
+It should then appear under "New Tracking Project" in your application
+launcher (e.g. GNOME Activities search).
+
+If you'd rather keep double-clicking the file directly in `~/tracking`, right-
+click it → **Allow Launching** (Nautilus) or, from a terminal:
+
+```bash
+gio set ~/tracking/"New Project.desktop" metadata::trusted true
+```
+
+If it still does nothing, check `/tmp/new_project_launch.log` — the launcher
+writes errors there (for example, if the tracker was cloned somewhere other
+than `~/tracking`, in which case edit the `Exec=` line in the `.desktop` file
+to match).
 
 ---
 

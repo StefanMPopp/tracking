@@ -14,7 +14,6 @@ Uses tkinter only (Python standard library), so it needs no extra install.
 
 import subprocess
 import sys
-import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk
@@ -85,16 +84,16 @@ class NewProjectApp:
         self.tag_label.pack(fill="x")
 
         self.tag_fix_frame = tk.Frame(self.tag_panel, bg=PANEL)
-        tk.Label(self.tag_fix_frame, text="Create and push tag:",
-                 bg=PANEL, fg=MUTED, font=("TkDefaultFont", 9)).pack(side="left")
-        self.tag_entry = tk.Entry(self.tag_fix_frame, width=12, bg=BG, fg=TEXT,
-                                  insertbackground=TEXT, relief="flat")
-        self.tag_entry.pack(side="left", padx=6)
-        self.tag_button = tk.Button(
-            self.tag_fix_frame, text="Tag and push", command=self._create_tag,
+        tk.Label(
+            self.tag_fix_frame,
+            text="Tag a release with:  uv run tracker release",
+            bg=PANEL, fg=MUTED, font=("TkDefaultFont", 9, "italic"),
+        ).pack(side="left")
+        self.recheck_button = tk.Button(
+            self.tag_fix_frame, text="Recheck", command=self._check_tag,
             bg=BORDER, fg=TEXT, relief="flat", padx=10, cursor="hand2",
         )
-        self.tag_button.pack(side="left")
+        self.recheck_button.pack(side="left", padx=(10, 0))
 
         # --- form ---
         form = tk.Frame(outer, bg=BG)
@@ -112,7 +111,7 @@ class NewProjectApp:
 
         tk.Label(form, text="Location", bg=BG, fg=MUTED,
                  font=("TkDefaultFont", 9)).grid(row=3, column=0, sticky="w")
-        self.path_var = tk.StringVar(value=str(Path.home() / "projects"))
+        self.path_var = tk.StringVar(value=str(Path.home() / "Documents"))
         path_entry = tk.Entry(form, textvariable=self.path_var, bg=PANEL, fg=TEXT,
                               insertbackground=TEXT, relief="flat")
         path_entry.grid(row=4, column=0, sticky="ew", ipady=5, pady=(2, 2))
@@ -177,34 +176,8 @@ class NewProjectApp:
             self.tracker_tag = None
             self.tag_error = str(error)
             self.tag_label.config(text=str(error), fg=WARN)
-            self.tag_entry.delete(0, "end")
-            self.tag_entry.insert(0, f"v{__version__}")
             self.tag_fix_frame.pack(fill="x", pady=(10, 0))
             self.create_button.config(state="disabled", bg="#3a3a4e")
-
-    def _create_tag(self) -> None:
-        """Create and push the tag the user typed, then re-check."""
-        tag = self.tag_entry.get().strip()
-        if not tag:
-            return
-        self.tag_button.config(state="disabled", text="Tagging…")
-
-        def work() -> None:
-            try:
-                subprocess.run(["git", "-C", str(REPO_ROOT), "tag", tag],
-                               check=True, capture_output=True, text=True)
-                subprocess.run(["git", "-C", str(REPO_ROOT), "push", "origin", tag],
-                               check=True, capture_output=True, text=True)
-                self.root.after(0, self._check_tag)
-            except subprocess.CalledProcessError as error:
-                message = (error.stderr or error.stdout or str(error)).strip()
-                self.root.after(0, lambda: self.tag_label.config(
-                    text=f"Could not create tag:\n{message}", fg=ERR_RED))
-            finally:
-                self.root.after(0, lambda: self.tag_button.config(
-                    state="normal", text="Tag and push"))
-
-        threading.Thread(target=work, daemon=True).start()
 
     def _create(self) -> None:
         name = self.name_var.get().strip()

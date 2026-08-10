@@ -2,8 +2,7 @@
 Type=Application
 Name=New Tracking Project
 Comment=Create a new insect-tracking experiment project
-Exec=bash -c 'cd "$(dirname "%k")" && python3 new_project.py'
-Path=.
+Exec=bash -c 'cd "$HOME/tracking" 2>/tmp/new_project_launch.log && python3 new_project.py >>/tmp/new_project_launch.log 2>&1 || (command -v zenity >/dev/null && zenity --error --text="New Project failed to start.\nSee /tmp/new_project_launch.log" || true)'
 Icon=folder-new
 Terminal=false
 Categories=Science;Utility;

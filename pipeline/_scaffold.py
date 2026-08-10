@@ -31,6 +31,126 @@ PROJECT_SUBDIRS = [
 ]
 
 
+def next_patch_version(version: str) -> str:
+    """'0.3.0' -> '0.3.1'. Falls back to appending '.1' if unparseable."""
+    parts = version.split(".")
+    if len(parts) == 3 and all(p.isdigit() for p in parts):
+        major, minor, patch = parts
+        return f"{major}.{minor}.{int(patch) + 1}"
+    return f"{version}.1"
+
+
+def _git(repo_root: Path, *args: str, check: bool = True) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(repo_root), *args],
+        capture_output=True, text=True,
+    )
+    if check and result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip())
+    return result.stdout.strip()
+
+
+def commit_and_push(repo_root: Path, message: str) -> bool:
+    """
+    Stage everything, commit with the given message, and push the current
+    branch. Returns False (no-op) if there was nothing to commit and nothing
+    to push; True if a commit and/or push actually happened.
+
+    This is the everyday "ship my edits" action — separate from
+    bump_and_tag(), which is only ever about tagging a version.
+    """
+    committed = False
+    if _git(repo_root, "status", "--porcelain", check=False):
+        _git(repo_root, "add", "-A")
+        _git(repo_root, "commit", "-m", message)
+        committed = True
+
+    branch = _git(repo_root, "rev-parse", "--abbrev-ref", "HEAD")
+    ahead = _git(
+        repo_root, "rev-list", f"origin/{branch}..HEAD", "--count", check=False
+    )
+    if not committed and (not ahead or ahead == "0"):
+        return False
+
+    _git(repo_root, "push", "origin", branch)
+    return True
+
+
+def bump_and_tag(repo_root: Path, new_version: str) -> str:
+    """
+    Set new_version in pyproject.toml and pipeline/__init__.py, commit that
+    change (only if something actually changed), tag it, and push both the
+    branch and the tag. Returns the tag.
+
+    Refuses to run if the tree has unrelated uncommitted changes, so the
+    version-bump commit doesn't silently sweep up other in-progress work —
+    commit or use commit_and_push() first.
+    """
+    import re
+    import shutil
+
+    def git(*args: str, check: bool = True) -> str:
+        return _git(repo_root, *args, check=check)
+
+    tag = f"v{new_version}"
+
+    if git("tag", "-l", tag, check=False):
+        raise RuntimeError(
+            f"Tag '{tag}' already exists. Choose a version that hasn't been used."
+        )
+
+    dirty = git("status", "--porcelain", check=False)
+    if dirty:
+        raise RuntimeError(
+            "The tracker repo has uncommitted changes:\n\n"
+            f"{dirty}\n\n"
+            "Commit or stash them first, so the version-bump commit only "
+            "contains the version change."
+        )
+
+    pyproject_file = repo_root / "pyproject.toml"
+    init_file       = repo_root / "pipeline" / "__init__.py"
+
+    pyproject_text, pyproject_count = re.subn(
+        r'(?m)^version = "[^"]*"', f'version = "{new_version}"',
+        pyproject_file.read_text(), count=1,
+    )
+    init_text, init_count = re.subn(
+        r'(?m)^__version__ = "[^"]*"', f'__version__ = "{new_version}"',
+        init_file.read_text(), count=1,
+    )
+    if pyproject_count == 0 or init_count == 0:
+        raise RuntimeError(
+            "Could not find the version line in pyproject.toml or "
+            "pipeline/__init__.py to update."
+        )
+
+    pyproject_file.write_text(pyproject_text)
+    init_file.write_text(init_text)
+
+    lock_file = repo_root / "uv.lock"
+    uv_path   = shutil.which("uv")
+    if uv_path:
+        subprocess.run([uv_path, "lock"], cwd=repo_root, capture_output=True, text=True)
+        # A version-only change to the local project can leave uv.lock
+        # unchanged; only stage it if `uv lock` actually touched it.
+
+    changed_files = [pyproject_file, init_file]
+    if lock_file.exists():
+        changed_files.append(lock_file)
+
+    if git("status", "--porcelain", check=False):
+        git("add", *[str(f) for f in changed_files])
+        git("commit", "-m", f"Bump version to {new_version}")
+
+    git("tag", tag)
+    branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    git("push", "origin", branch)
+    git("push", "origin", tag)
+
+    return tag
+
+
 # =============================================================================
 # Tag resolution
 # =============================================================================

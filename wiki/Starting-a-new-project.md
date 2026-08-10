@@ -29,20 +29,29 @@ for the next steps.
 
 ### If the tracker is not tagged
 
-The window says so and disables the Create button, because a project pinned to
-an untagged commit is not reproducible. It pre-fills the tag matching the
-current version and offers a **Tag and push** button — one click creates the
-tag and pushes it, then re-checks. You can also do it by hand:
+The window says so and disables the Create button. Tagging is a **tracker
+development decision** — "this is a good stopping point, new projects should
+pin here" — not something project creation should trigger on its own. So the
+window only reports the problem; it never tags or pushes anything itself.
+
+Tag it as a deliberate step, once your tracker changes are finished and
+pushed:
 
 ```bash
 cd ~/tracking
-git tag v0.3.0          # must match `version` in pyproject.toml
-git push origin v0.3.0
+uv run tracker release
 ```
 
-The same check rejects a **dirty working tree** (uncommitted changes mean the
-tag does not describe the code that would actually run) and a **tag that
-disagrees with `pyproject.toml`**.
+Shows the current and proposed new version, asks to confirm, then bumps
+`pyproject.toml` and `pipeline/__init__.py`, commits just that change, tags,
+and pushes both. Pass `--version 0.4.0` to pick a specific number instead of
+the suggested next patch version.
+
+Then click **Recheck** in the New Project window (or just re-run it).
+
+The same underlying check rejects a **dirty working tree** — uncommitted
+changes mean the tag would not describe the code that actually runs. Commit
+or stash first.
 
 ---
 
@@ -50,7 +59,7 @@ disagrees with `pyproject.toml`**.
 
 ```bash
 cd ~/tracking
-uv run tracker new-project --name pain_killers --path ~/projects
+uv run tracker new-project --name pain_killers --path ~/Documents
 ```
 
 Identical scaffolding and identical checks — the window is just a front end.
@@ -60,7 +69,7 @@ Identical scaffolding and identical checks — the window is just a front end.
 ## What gets created
 
 ```
-~/projects/pain_killers/
+~/Documents/pain_killers/
     setup.py            ← the single file a reviewer downloads and runs
     pyproject.toml      ← analysis deps + tracker pinned to v0.3.0
     project.yaml        ← tracker configuration (read by app and notebook)
@@ -82,7 +91,7 @@ Identical scaffolding and identical checks — the window is just a front end.
 ## Publishing it
 
 ```bash
-cd ~/projects/pain_killers
+cd ~/Documents/pain_killers
 git init && git add -A && git commit -m "Initial scaffold"
 gh repo create StefanMPopp/pain_killers --private --source=. --push
 ```
@@ -101,7 +110,7 @@ Two ways:
 - In the tracker app: **🔗 Link video** in the top bar, paste the full path
 - By hand:
   ```bash
-  ln -s /Volumes/MyDrive/vid_001.MP4 ~/projects/pain_killers/2_tracking/1_videos/vid_001.MP4
+  ln -s /Volumes/MyDrive/vid_001.MP4 ~/Documents/pain_killers/2_tracking/1_videos/vid_001.MP4
   ```
 
 Dedicated short clips for parameter tuning go in `2_tracking/tuning/1_videos/`
@@ -112,7 +121,7 @@ instead, and are used in the app's Tuning mode.
 ## First run
 
 ```bash
-cd ~/projects/pain_killers
+cd ~/Documents/pain_killers
 uv sync --extra tracking
 uv run jupyter lab 1_pipeline.ipynb
 ```
