@@ -1,6 +1,6 @@
 [project]
 name = "tracking"
-version = "0.3.2"
+version = "0.3.3"
 description = "Insect video tracking pipeline"
 requires-python = ">=3.11"
 
