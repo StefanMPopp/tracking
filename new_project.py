@@ -77,7 +77,7 @@ class NewProjectApp:
                                   highlightbackground=BORDER, highlightthickness=1)
         self.tag_panel.pack(fill="x", pady=(0, 14))
         self.tag_label = tk.Label(
-            self.tag_panel, text="Checking tracker version…",
+            self.tag_panel, text="Checking tracker version...",
             bg=PANEL, fg=MUTED, justify="left", anchor="w",
             font=("TkDefaultFont", 9), wraplength=540,
         )
@@ -105,7 +105,7 @@ class NewProjectApp:
         name_entry = tk.Entry(form, textvariable=self.name_var, bg=PANEL, fg=TEXT,
                               insertbackground=TEXT, relief="flat")
         name_entry.grid(row=1, column=0, columnspan=2, sticky="ew", ipady=5, pady=(2, 2))
-        tk.Label(form, text="Letters, numbers and underscores — becomes the repo name.",
+        tk.Label(form, text="Letters, numbers and underscores - becomes the repo name.",
                  bg=BG, fg="#5a7a99", font=("TkDefaultFont", 8)).grid(
             row=2, column=0, columnspan=2, sticky="w", pady=(0, 12))
 
@@ -115,7 +115,7 @@ class NewProjectApp:
         path_entry = tk.Entry(form, textvariable=self.path_var, bg=PANEL, fg=TEXT,
                               insertbackground=TEXT, relief="flat")
         path_entry.grid(row=4, column=0, sticky="ew", ipady=5, pady=(2, 2))
-        tk.Button(form, text="Browse…", command=self._browse,
+        tk.Button(form, text="Browse", command=self._browse,
                   bg=BORDER, fg=TEXT, relief="flat", padx=12, cursor="hand2").grid(
             row=4, column=1, padx=(8, 0))
         tk.Label(form, text="The project folder is created inside this location.",
@@ -167,7 +167,7 @@ class NewProjectApp:
             self.tracker_tag = resolve_tracker_tag(REPO_ROOT, __version__)
             self.tag_error = None
             self.tag_label.config(
-                text=f"Tracker version {self.tracker_tag} — new projects will pin to this.",
+                text=f"Tracker version {self.tracker_tag} - new projects will pin to this.",
                 fg=OK_TEXT,
             )
             self.tag_fix_frame.pack_forget()
@@ -177,7 +177,10 @@ class NewProjectApp:
             self.tag_error = str(error)
             self.tag_label.config(text=str(error), fg=WARN)
             self.tag_fix_frame.pack(fill="x", pady=(10, 0))
-            self.create_button.config(state="disabled", bg="#3a3a4e")
+            # Deliberately left enabled: a disabled button silently swallows
+            # clicks, which reads as "the app is broken". Clicking now shows
+            # the reason and what to run instead.
+            self.create_button.config(state="normal", bg="#7b5800")
 
     def _create(self) -> None:
         name = self.name_var.get().strip()
@@ -189,15 +192,22 @@ class NewProjectApp:
         if not all(ch.isalnum() or ch == "_" for ch in name):
             self._show_result(
                 False, "Invalid project name.",
-                "Use only letters, numbers and underscores — it becomes a repo name.",
+                "Use only letters, numbers and underscores - it becomes a repo name.",
             )
             return
         if not parent:
             self._show_result(False, "Choose a location.")
             return
         if self.tracker_tag is None:
-            self._show_result(False, "Tracker version is not tagged yet.",
-                              "Create the tag above first.")
+            self._show_result(
+                False, "The tracker needs to be released first.",
+                "A project must pin a tagged tracker version, and the current "
+                "commit isn't tagged.\n\n"
+                "In a terminal:\n"
+                "    cd ~/tracking\n"
+                "    uv run tracker release\n\n"
+                "Then click Recheck above.",
+            )
             return
 
         projects_dir = Path(parent).expanduser().resolve()
@@ -218,7 +228,7 @@ class NewProjectApp:
 
         self._show_result(
             True,
-            f"Project created — pinned to tracker {self.tracker_tag}",
+            f"Project created - pinned to tracker {self.tracker_tag}",
             f"{project_dir}\n\n"
             f"Next:\n"
             f"  1. cd {project_dir}\n"
@@ -242,7 +252,7 @@ class NewProjectApp:
 
     def _show_result(self, success: bool, banner: str, detail: str = "") -> None:
         self.result_banner.config(
-            text=("✓  " if success else "✗  ") + banner,
+            text=("OK   " if success else "!   ") + banner,
             fg=(OK_TEXT if success else ERR_RED),
         )
         self.result_detail.config(text=detail)

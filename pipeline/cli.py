@@ -44,6 +44,11 @@ def run_push(argv: list[str]) -> None:
         "--release", action="store_true",
         help="Also tag a release immediately afterward (runs `tracker release`)",
     )
+    parser.add_argument(
+        "--release-version", default=None,
+        help="Specific version to release as, e.g. 0.4.0 (implies --release; "
+             "default without this flag is the next patch version)",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -54,9 +59,10 @@ def run_push(argv: list[str]) -> None:
 
     print("Nothing to commit or push." if not pushed else "Committed and pushed.")
 
-    if args.release:
+    if args.release or args.release_version:
         print("")
-        run_release([])
+        release_argv = ["--version", args.release_version] if args.release_version else []
+        run_release(release_argv)
 
 
 def run_release(argv: list[str]) -> None:
