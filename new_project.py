@@ -226,21 +226,14 @@ class NewProjectApp:
         self.created_project_dir = project_dir
         print_next_steps(project_dir, name, self.tracker_tag)
 
-        self._show_result(
-            True,
-            f"Project created - pinned to tracker {self.tracker_tag}",
-            f"{project_dir}\n\n"
-            f"Next:\n"
-            f"  1. cd {project_dir}\n"
-            f"  2. git init && git add -A && git commit -m 'Initial scaffold'\n"
-            f"  3. gh repo create StefanMPopp/{name} --private --source=. --push\n"
-            f"  4. uv sync --extra tracking\n"
-            f"  5. uv run jupyter lab 1_pipeline.ipynb",
-        )
-        self.create_button.config(text="Create another", bg=BORDER, fg=TEXT)
-
         if self.open_after_var.get():
             self._open_folder(project_dir)
+
+        # Full next-steps detail goes to the terminal (print_next_steps above)
+        # and is reiterated in the project's own README / project.yaml — the
+        # window just confirms success, then closes on its own.
+        self._show_result(True, f"Project created - pinned to tracker {self.tracker_tag}")
+        self.root.after(1100, self.root.destroy)
 
     def _open_folder(self, folder: Path) -> None:
         opener = {"darwin": "open", "win32": "explorer"}.get(sys.platform, "xdg-open")

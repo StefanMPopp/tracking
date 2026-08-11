@@ -503,13 +503,13 @@ def _pipeline_notebook(project_name: str) -> str:
         return {
             "cell_type": "code", "execution_count": None,
             "metadata": {}, "outputs": [],
-            "source": source.strip().split("\n"),
+            "source": source.strip().splitlines(keepends=True),
         }
 
     def markdown(source: str) -> dict:
         return {
             "cell_type": "markdown", "metadata": {},
-            "source": source.strip().split("\n"),
+            "source": source.strip().splitlines(keepends=True),
         }
 
     cells = [
@@ -644,15 +644,21 @@ def print_next_steps(project_dir: Path, project_name: str, tracker_tag: str) -> 
     print("")
     print("Next steps:")
     print("")
-    print(f"  1. Fill in the required fields in {project_dir / 'project.yaml'}")
+    print(f"  1. Open {project_dir / 'project.yaml'} and fill in:")
     print("       meta_real_width, track_max_individuals, individual_prefix")
     print("     (or leave them and set them in the app's Parameters tab)")
+    print(f"     Add a one-line description at the top of {project_dir / 'README.md'}")
     print("")
-    print("  2. Publish the repo so it can be shared and reproduced:")
+    print("  2. Publish the repo — recommended so it can be shared and")
+    print("     reproduced, but optional if this stays local for now:")
     print(f"       cd {project_dir}")
     print("       git init && git add -A && git commit -m 'Initial scaffold'")
     print(f"       gh repo create StefanMPopp/{project_name} --private --source=. --push")
     print("")
     print("  3. Start working:")
-    print("       uv sync --extra tracking")
+    print(f"       cd {project_dir}")
+    print("       uv sync --extra tracking   # installs this project's dependencies")
     print("       uv run jupyter lab 1_pipeline.ipynb")
+    print("")
+    print("     From here on, everything — preprocessing, tracking, and")
+    print("     postprocessing — happens inside 1_pipeline.ipynb.")

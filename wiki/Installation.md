@@ -133,6 +133,56 @@ These defaults are correct for most machines. Edit only if your setup differs.
 
 ---
 
+## Jupyter opens the wrong browser
+
+`jupyter lab` uses Python's `webbrowser` module to launch a URL, which is not
+the same as your OS's default-browser setting. If `$BROWSER` is unset, it
+falls back through a hardcoded list of known browser names and often lands on
+Firefox regardless of what you've actually set as default.
+
+Fix once, for every project:
+
+```bash
+echo 'export BROWSER=xdg-open' >> ~/.bashrc   # or ~/.zshrc
+source ~/.bashrc
+```
+
+`xdg-open` delegates to whatever your desktop environment has configured as
+default, so this then matches your normal browser.
+
+### Ubuntu: "requires the firefox snap to be installed"
+
+If your system default browser really is Firefox, `xdg-open` will correctly
+try to launch it — but on Ubuntu 22.04+, `/usr/bin/firefox` is often just a
+transitional stub that errors unless the snap is installed:
+
+```
+Command '/usr/bin/firefox' requires the firefox snap to be installed.
+```
+
+This is an Ubuntu/snap issue, unrelated to Jupyter. Pick one:
+
+```bash
+# Install the real thing:
+sudo snap install firefox
+
+# Or point BROWSER straight at another browser you already have,
+# bypassing xdg-open's (broken) default entirely:
+which google-chrome chromium chromium-browser brave-browser 2>/dev/null
+echo 'export BROWSER=google-chrome' >> ~/.bashrc   # use whichever you found
+source ~/.bashrc
+```
+
+### Skip browser launching entirely
+
+Works regardless of the above — open the printed URL yourself:
+
+```bash
+uv run jupyter lab --no-browser 1_pipeline.ipynb
+```
+
+---
+
 ## Verifying the install
 
 ```bash

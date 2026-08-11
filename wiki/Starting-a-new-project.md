@@ -88,7 +88,10 @@ Identical scaffolding and identical checks — the window is just a front end.
 
 ---
 
-## Publishing it
+## Publishing it (recommended, optional)
+
+Not required to start working — the project is fully usable locally. Do this
+once you want it shareable and reproducible by others:
 
 ```bash
 cd ~/Documents/pain_killers
@@ -96,7 +99,7 @@ git init && git add -A && git commit -m "Initial scaffold"
 gh repo create StefanMPopp/pain_killers --private --source=. --push
 ```
 
-Do this early — the README in the project tells reviewers to fetch `setup.py`
+If you publish it, do so early — the README in the project tells reviewers to fetch `setup.py`
 from the repo, so those instructions only work once it exists.
 
 ---
@@ -122,10 +125,14 @@ instead, and are used in the app's Tuning mode.
 
 ```bash
 cd ~/Documents/pain_killers
-uv sync --extra tracking
+uv sync --extra tracking   # installs this project's dependencies
 uv run jupyter lab 1_pipeline.ipynb
 ```
 
 Set `meta_real_width`, `track_max_individuals` and `individual_prefix` — either
-in `project.yaml` directly or in the app's **Parameters** tab. See
+in `project.yaml` directly or in the app's **Parameters** tab — and add a
+one-line description at the top of `README.md`. See
 [Using the tracker](Using-the-tracker).
+
+From here on, everything — preprocessing, tracking, and postprocessing —
+happens inside `1_pipeline.ipynb`.
