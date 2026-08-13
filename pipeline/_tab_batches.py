@@ -53,6 +53,7 @@ class UpdateProjectParamsRequest(BaseModel):
     meta_real_width:       float | None = None
     track_max_individuals: int | None = None
     individual_prefix:     str | None = None
+    video_extension:       str | None = None
 
 
 # =============================================================================
@@ -107,6 +108,7 @@ def register_batches_routes(app: FastAPI, state: dict) -> None:
             "meta_real_width":       project_config.get("meta_real_width"),
             "track_max_individuals": project_config.get("track_max_individuals"),
             "individual_prefix":     project_config.get("individual_prefix"),
+            "video_extension":       project_config.get("video_extension"),
         })
 
     @app.post("/batches/assign")
@@ -200,6 +202,8 @@ def register_batches_routes(app: FastAPI, state: dict) -> None:
             project_config["track_max_individuals"] = request.track_max_individuals
         if request.individual_prefix is not None:
             project_config["individual_prefix"] = request.individual_prefix
+        if request.video_extension is not None:
+            project_config["video_extension"] = request.video_extension
 
         _write_project_config(state, project_config)
         logger.info(
@@ -228,11 +232,11 @@ def _resolve_dirs(state: dict) -> tuple[Path, Path, Path]:
     Mirror app.py's _base_dirs logic locally (videos_dir, pv_dir, masks_dir)
     so this module does not need to import from app.py directly.
     """
-    project_dir = state["project_dir"]
+    root = state["project_dir"] / "2_tracking"
     if state.get("mode") == "tuning":
-        tuning_dir = project_dir / "tuning"
+        tuning_dir = root / "tuning"
         return tuning_dir / "1_videos", tuning_dir / "2_pv", tuning_dir / "masks"
-    return project_dir / "1_videos", project_dir / "2_pv", project_dir / "masks"
+    return root / "1_videos", root / "2_pv", root / "masks"
 
 
 def _read_project_config(state: dict) -> dict:
@@ -250,7 +254,7 @@ def _render_mask_thumbnail(batch_name: str, masks_dir: Path) -> str | None:
     Draw batch-level mask polygons on a neutral grid background, scaled to
     THUMBNAIL_SIZE. Returns a base64 PNG, or None if no masks exist.
     """
-    from _masks import load_masks_for_batch
+    from ._masks import load_masks_for_batch
 
     masks = load_masks_for_batch(batch_name, masks_dir)
     if not masks["include"] and not masks["ignore"]:
@@ -375,6 +379,14 @@ def build_batches_tab_html(video_name: str) -> str:
                  border-radius:4px; color:#e0e0e0; font-size:12px;"
                  onblur="saveProjectParams()">
         </div>
+        <div style="flex:1;">
+          <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">
+            Video extension <span style="color:#5a7a99;">(override)</span></label>
+          <input type="text" id="proj-video-extension" placeholder="auto"
+                 style="width:100%; padding:5px 6px; background:#1a1a2e; border:1px solid #415a77;
+                 border-radius:4px; color:#e0e0e0; font-size:12px;"
+                 onblur="saveProjectParams()">
+        </div>
       </div>
     </div>
 
@@ -412,19 +424,22 @@ def build_batches_tab_html(video_name: str) -> str:
   }}
 
   function renderProjectParams(d) {{
-    document.getElementById("proj-meta-real-width").value  = d.meta_real_width ?? "";
-    document.getElementById("proj-max-individuals").value  = d.track_max_individuals ?? "";
+    document.getElementById("proj-meta-real-width").value   = d.meta_real_width ?? "";
+    document.getElementById("proj-max-individuals").value   = d.track_max_individuals ?? "";
     document.getElementById("proj-individual-prefix").value = d.individual_prefix ?? "";
+    document.getElementById("proj-video-extension").value   = d.video_extension ?? "";
   }}
 
   window.saveProjectParams = async function() {{
-    const widthRaw  = document.getElementById("proj-meta-real-width").value;
+    const widthRaw   = document.getElementById("proj-meta-real-width").value;
     const maxRaw     = document.getElementById("proj-max-individuals").value;
     const prefixRaw  = document.getElementById("proj-individual-prefix").value;
+    const extRaw     = document.getElementById("proj-video-extension").value.trim();
     const body = {{
       meta_real_width:       widthRaw === "" ? null : parseFloat(widthRaw),
       track_max_individuals: maxRaw === ""   ? null : parseInt(maxRaw),
       individual_prefix:     prefixRaw === "" ? null : prefixRaw,
+      video_extension:       extRaw === "" ? null : extRaw,
     }};
     await fetch("/batches/update-project-params", {{method:"POST",
       headers:{{"Content-Type":"application/json"}}, body:JSON.stringify(body)}});

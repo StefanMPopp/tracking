@@ -14,6 +14,7 @@ from an untagged tracker checkout and tells you which tag to create.
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 TRACKER_REPO_URL = "https://github.com/StefanMPopp/tracking"
@@ -106,6 +107,22 @@ def bump_and_tag(repo_root: Path, new_version: str) -> str:
             f"{dirty}\n\n"
             "Commit or stash them first, so the version-bump commit only "
             "contains the version change."
+        )
+
+    # A tag is an immutable promise that this code works. Verify the package
+    # actually imports before publishing one — a tag captured mid-refactor
+    # (e.g. half-converted imports) is otherwise only discovered later, by
+    # whoever installs it into a project.
+    import_check = subprocess.run(
+        [sys.executable, "-c", "import pipeline.app, pipeline.cli"],
+        cwd=repo_root, capture_output=True, text=True,
+    )
+    if import_check.returncode != 0:
+        raise RuntimeError(
+            "The tracker package does not import cleanly, so tagging it "
+            "would publish a broken version:\n\n"
+            f"{import_check.stderr.strip()}\n\n"
+            "Fix the import error, commit, then release again."
         )
 
     pyproject_file = repo_root / "pyproject.toml"

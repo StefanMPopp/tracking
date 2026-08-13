@@ -26,8 +26,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-sys.path.insert(0, str(Path(__file__).parent))
-from _masks import (
+from ._masks import (
     delete_polygon,
     detect_circles,
     load_default_masks,
@@ -1130,12 +1129,12 @@ def main() -> None:
         logger.error("meta_real_width not set in project.yaml.")
         sys.exit(1)
 
-    video_file = project_dir / "1_videos" / f"{args.video}.{video_extension}"
+    video_file = project_dir / "2_tracking" / "1_videos" / f"{args.video}.{video_extension}"
     if not video_file.exists():
         logger.error("Video not found: %s", video_file)
         sys.exit(1)
 
-    masks_dir = project_dir / "masks"
+    masks_dir = project_dir / "2_tracking" / "masks"
     masks_dir.mkdir(exist_ok=True)
 
     APP_STATE["frame"]           = _extract_frame(video_file, args.frame)

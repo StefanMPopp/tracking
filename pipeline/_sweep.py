@@ -32,7 +32,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from _settings import patch_settings
+from ._settings import patch_settings
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ def run_sweep(
 
     videos_dir is the folder containing the source video — pass project_dir /
     "1_videos" for a real trial video, or the tuning-mode videos folder
-    (e.g. project_dir / "tuning" / "1_videos") for a dedicated tuning clip.
+    (e.g. project_dir / "2_tracking" / "tuning" / "1_videos") for a tuning clip.
 
     masks_dir is resolved the same way: project-level masks/ for real videos,
     or tuning/masks/ for dedicated tuning clips (which are not part of any
@@ -125,7 +125,7 @@ def run_sweep(
     if video_conversion_range is None:
         # Fall back to the value in default.settings so the annotated clip
         # uses the same range that TGrabs will use.
-        from _settings import read_settings
+        from ._settings import read_settings
         default_settings = read_settings(base_settings_file)
         raw = default_settings.get("video_conversion_range")
         if raw:
@@ -161,10 +161,10 @@ def run_sweep(
     pv_dir = tuning_dir / "2_pv"
     pv_dir.mkdir(parents=True, exist_ok=True)
 
-    from _background import copy_background_to_sweep
+    from ._background import copy_background_to_sweep
     copy_background_to_sweep(
         video_name=video_name,
-        project_pv_dir=project_dir / "2_pv",
+        project_pv_dir=project_dir / "2_tracking" / "2_pv",
         sweep_pv_dir=pv_dir,
     )
 
@@ -201,7 +201,7 @@ def run_sweep(
                 # Only one side was given — read the missing side from
                 # default.settings' existing detect_size_filter so we don't
                 # silently drop the override entirely.
-                from _settings import read_settings
+                from ._settings import read_settings
                 import json
                 default_settings = read_settings(base_settings_file)
                 raw = default_settings.get("detect_size_filter")
@@ -236,7 +236,7 @@ def run_sweep(
                 )
 
         # Apply masks if present for this video (video → batch → default)
-        from _masks import load_resolved_masks, masks_to_trex_string
+        from ._masks import load_resolved_masks, masks_to_trex_string
         masks       = load_resolved_masks(video_name, project_config, masks_dir)
         has_include = bool(masks["include"])
         has_ignore  = bool(masks["ignore"])

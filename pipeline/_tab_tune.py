@@ -28,9 +28,8 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-sys.path.insert(0, str(Path(__file__).parent))
-from _resolve import resolve_batch_for_video, resolve_effective_config
-from _settings import read_settings
+from ._resolve import resolve_batch_for_video, resolve_effective_config
+from ._settings import read_settings
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +192,7 @@ def register_tune_routes(app: FastAPI, state: dict) -> None:
         via /tuning/stop-sweep, returns whatever clips completed before the
         stop request, with cancelled=True.
         """
-        from _sweep import run_sweep
+        from ._sweep import run_sweep
 
         project_dir    = state["project_dir"]
         video_name     = state["video_name"]
@@ -208,7 +207,7 @@ def register_tune_routes(app: FastAPI, state: dict) -> None:
         if request.animal_size_max is not None:
             effective_config["animal_size_max"] = request.animal_size_max
 
-        tuning_dir = project_dir / "tuning"
+        tuning_dir = project_dir / "2_tracking" / "tuning"
         videos_dir = state["videos_dir"]   # already mode-resolved by app.py
         masks_dir  = state["masks_dir"]    # already mode-resolved by app.py
 
@@ -237,7 +236,7 @@ def register_tune_routes(app: FastAPI, state: dict) -> None:
     @app.post("/tuning/stop-sweep")
     def stop_sweep_route():
         """Request cancellation of the currently running sweep, if any."""
-        from _sweep import request_sweep_stop
+        from ._sweep import request_sweep_stop
         request_sweep_stop()
         return JSONResponse({"ok": True})
 
@@ -251,7 +250,7 @@ def register_tune_routes(app: FastAPI, state: dict) -> None:
     @app.get("/tuning/clip/{filename}")
     def get_clip(filename: str):
         """Serve a tuning clip file with range-request support for scrubbing."""
-        tuning_dir = state["project_dir"] / "tuning"
+        tuning_dir = state["project_dir"] / "2_tracking" / "tuning"
         clip_file  = tuning_dir / filename
         if not clip_file.exists() or clip_file.parent != tuning_dir:
             return JSONResponse({"error": "Clip not found"}, status_code=404)
@@ -274,7 +273,7 @@ def register_tune_routes(app: FastAPI, state: dict) -> None:
             return JSONResponse({"error": "Could not parse filename"}, status_code=400)
 
         video_name, threshold_str = match.group(1), match.group(2)
-        tuning_dir     = state["project_dir"] / "tuning"
+        tuning_dir     = state["project_dir"] / "2_tracking" / "tuning"
         settings_file  = tuning_dir / f"{video_name}_thresh{threshold_str}.settings"
 
         if not settings_file.exists():
@@ -284,7 +283,7 @@ def register_tune_routes(app: FastAPI, state: dict) -> None:
                 "animal_size_max": None,
             })
 
-        from _settings import read_settings
+        from ._settings import read_settings
         settings = read_settings(settings_file)
         raw = settings.get("detect_size_filter")
         size_min, size_max = None, None
@@ -323,7 +322,7 @@ def _list_existing_clips(state: dict, video_name: str | None) -> list[str]:
     List all *_t*.mp4 clips in the tuning folder, most relevant ones (for
     the current video) first.
     """
-    tuning_dir = state["project_dir"] / "tuning"
+    tuning_dir = state["project_dir"] / "2_tracking" / "tuning"
     if not tuning_dir.exists():
         return []
     all_clips = sorted(f.name for f in tuning_dir.glob("*_t*.mp4"))

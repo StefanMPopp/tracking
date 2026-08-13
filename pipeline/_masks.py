@@ -89,7 +89,7 @@ def load_resolved_masks(video_name: str, project_config: dict, masks_dir: Path) 
 
     Returns {"include": [...], "ignore": [...], "source": "video"|"batch"|"default"|"none"}
     """
-    from _resolve import resolve_batch_for_video
+    from ._resolve import resolve_batch_for_video
 
     video_masks = load_masks_for_video(video_name, masks_dir)
     if video_masks["include"] or video_masks["ignore"]:

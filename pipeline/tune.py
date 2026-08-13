@@ -27,11 +27,10 @@ from pathlib import Path
 
 import yaml
 
-sys.path.insert(0, str(Path(__file__).parent))
 
-from _background import background_image_path
-from _resolve import resolve_effective_config
-from _sweep import run_sweep
+from ._background import background_image_path
+from ._resolve import resolve_effective_config
+from ._sweep import run_sweep
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,7 +64,7 @@ def load_project_config(project_dir: Path) -> dict:
         raise FileNotFoundError(
             f"project.yaml not found at {project_yaml_file}.\n"
             f"Create a project first:\n"
-            f"  uv run python pipeline/new_project.py --name <name> --path <parent_dir>"
+            f"  uv run tracker new-project --name <name> --path <parent_dir>"
         )
     return yaml.safe_load(project_yaml_file.read_text())
 
@@ -237,11 +236,11 @@ def main() -> None:
             logger.error("--thresholds must be comma-separated integers.")
             sys.exit(1)
 
-    tuning_dir = project_dir / "tuning"
+    tuning_dir = project_dir / "2_tracking" / "tuning"
     tuning_dir.mkdir(exist_ok=True)
 
     video_extension = effective_config.get("video_extension", "MP4")
-    background_image_file = background_image_path(args.video, project_dir / "2_pv")
+    background_image_file = background_image_path(args.video, project_dir / "2_tracking" / "2_pv")
     if not background_image_file.exists():
         logger.info(
             "No background image found for '%s'. TGrabs will compute one "
@@ -263,8 +262,8 @@ def main() -> None:
         clip_files = run_sweep(
             video_name=args.video,
             project_dir=project_dir,
-            videos_dir=project_dir / "1_videos",
-            masks_dir=project_dir / "masks",
+            videos_dir=project_dir / "2_tracking" / "1_videos",
+            masks_dir=project_dir / "2_tracking" / "masks",
             tuning_dir=tuning_dir,
             base_settings_file=BASE_SETTINGS_FILE,
             pipeline_config=pipeline_config,

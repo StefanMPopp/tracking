@@ -25,7 +25,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from _masks import (
+from ._masks import (
     delete_polygon,
     detect_circles,
     load_default_masks,
@@ -105,7 +105,7 @@ def register_masks_routes(app: FastAPI, state: dict) -> None:
         batch's mask shapes. batch_name is null if the video is not in
         any batch.
         """
-        from _resolve import resolve_batch_for_video
+        from ._resolve import resolve_batch_for_video
         project_config = yaml.safe_load(state["project_yaml_file"].read_text())
         batch_name = resolve_batch_for_video(state["video_name"], project_config)
 
@@ -123,7 +123,7 @@ def register_masks_routes(app: FastAPI, state: dict) -> None:
     @app.post("/masks-frame/masks/save-batch-defaults")
     def save_batch_defaults(request: DefaultSaveRequest):
         """Save current shapes as defaults for the batch containing this video."""
-        from _resolve import resolve_batch_for_video
+        from ._resolve import resolve_batch_for_video
         project_config = yaml.safe_load(state["project_yaml_file"].read_text())
         batch_name = resolve_batch_for_video(state["video_name"], project_config)
         if batch_name is None:
@@ -172,7 +172,7 @@ def register_masks_routes(app: FastAPI, state: dict) -> None:
         why each candidate blob was accepted or rejected — for diagnosing
         "nothing detected" cases.
         """
-        from _masks import detect_circles_debug
+        from ._masks import detect_circles_debug
         frame  = state["display_frame"]
         result = detect_circles_debug(
             frame=frame, diameter_cm=request.diameter_cm, thickness_cm=request.thickness_cm,

@@ -20,7 +20,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from _background import (
+from ._background import (
     background_image_path,
     compute_background_image,
     resolve_background_source,
