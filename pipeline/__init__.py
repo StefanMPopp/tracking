@@ -9,4 +9,4 @@ Installed as a package, this exposes two console commands:
 See README.md for the full workflow.
 """
 
-__version__ = "0.3.3"
+__version__ = "0.3.4"
