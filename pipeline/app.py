@@ -35,6 +35,16 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+if __package__ in (None, ""):
+    raise SystemExit(
+        "This module is part of the 'pipeline' package and cannot be run as a\n"
+        "standalone script (its imports are relative).\n\n"
+        "Use instead:\n"
+        "    uv run tracker --project <project_path>\n"
+        "or, to run this module directly:\n"
+        "    uv run python -m pipeline.app --project <project_path>\n"
+    )
+
 from ._tab_background import build_background_tab_html, register_background_routes
 from ._tab_masks import build_masks_tab_html, register_masks_routes
 from ._tab_batches import build_batches_tab_html, register_batches_routes
@@ -577,9 +587,13 @@ function switchTab(tab) {{
   if (window.onTabActivated) window.onTabActivated(tab);
 }}
 
-function applyModeTabState() {{
+function applyModeTabState(mode) {{
+  // Falls back to the value baked in at render time, but callers that know
+  // the server's current mode (e.g. after /videos) should pass it, so the
+  // button state stays correct even if the page wasn't re-rendered.
+  const effectiveMode = mode || CURRENT_MODE;
   const tuneBtn = document.getElementById("tab-btn-tune");
-  if (CURRENT_MODE === "tuning") {{
+  if (effectiveMode === "tuning") {{
     tuneBtn.classList.remove("disabled");
     tuneBtn.title = "";
   }} else {{
@@ -605,6 +619,7 @@ async function populateVideoPicker() {{
     picker.appendChild(opt);
   }});
   setModeButtons(d.mode);
+  applyModeTabState(d.mode);
 }}
 
 function setModeButtons(mode) {{
@@ -628,9 +643,12 @@ async function onModePicked(mode) {{
   if (!d.ok) {{ alert("Could not switch mode: " + (d.error || "unknown error")); return; }}
   // Reload to re-render both tabs server-side for the new mode (with or
   // without a video — the placeholder pane handles the empty case).
+  // Assigning location.href only reloads if the URL actually differs, so
+  // set the tab param and call reload() explicitly.
   const url = new URL(window.location.href);
   url.searchParams.set("tab", activeTab);
-  window.location.href = url.toString();
+  window.history.replaceState(null, "", url.toString());
+  window.location.reload();
 }}
 
 async function onVideoPicked() {{

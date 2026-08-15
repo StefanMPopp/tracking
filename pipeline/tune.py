@@ -28,6 +28,16 @@ from pathlib import Path
 import yaml
 
 
+if __package__ in (None, ""):
+    raise SystemExit(
+        "This module is part of the 'pipeline' package and cannot be run as a\n"
+        "standalone script (its imports are relative).\n\n"
+        "Use instead:\n"
+        "    uv run tracker --project <project_path>\n"
+        "or, to run this module directly:\n"
+        "    uv run python -m pipeline.tune --project <project_path>\n"
+    )
+
 from ._background import background_image_path
 from ._resolve import resolve_effective_config
 from ._sweep import run_sweep

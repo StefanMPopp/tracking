@@ -26,6 +26,16 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+if __package__ in (None, ""):
+    raise SystemExit(
+        "This module is part of the 'pipeline' package and cannot be run as a\n"
+        "standalone script (its imports are relative).\n\n"
+        "Use instead:\n"
+        "    uv run tracker --project <project_path>\n"
+        "or, to run this module directly:\n"
+        "    uv run python -m pipeline.masks --project <project_path>\n"
+    )
+
 from ._masks import (
     delete_polygon,
     detect_circles,
