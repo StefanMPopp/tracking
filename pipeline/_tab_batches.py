@@ -95,6 +95,8 @@ class RemoveRequest(BaseModel):
 
 class UpdateBatchRequest(BaseModel):
     batch_name: str
+    animal_size_min: int | None = None
+    animal_size_max: int | None = None
     parameters: dict = {}
     description: str | None = None
     confirmed_detect_threshold: int | None = None
@@ -107,6 +109,8 @@ class UpdateProjectParamsRequest(BaseModel):
     track_max_individuals: int | None = None
     individual_prefix:     str | None = None
     video_extension:       str | None = None
+    animal_size_min:       int | None = None
+    animal_size_max:       int | None = None
     parameters:            dict = {}
 
 
@@ -147,6 +151,8 @@ def register_batches_routes(app: FastAPI, state: dict) -> None:
                 "confirmed_detect_threshold": batch_config.get("confirmed_detect_threshold"),
                 "video_conversion_range":     batch_config.get("video_conversion_range"),
                 "track_max_individuals":      batch_config.get("track_max_individuals"),
+                "animal_size_min":            batch_config.get("animal_size_min"),
+                "animal_size_max":            batch_config.get("animal_size_max"),
                 "individual_prefix":          batch_config.get("individual_prefix"),
                 "videos":                     batch_config.get("videos") or [],
             }
@@ -163,6 +169,8 @@ def register_batches_routes(app: FastAPI, state: dict) -> None:
             "track_max_individuals": project_config.get("track_max_individuals"),
             "individual_prefix":     project_config.get("individual_prefix"),
             "video_extension":       project_config.get("video_extension"),
+            "animal_size_min":       project_config.get("animal_size_min"),
+            "animal_size_max":       project_config.get("animal_size_max"),
             "parameters": {
                 parameter.name: project_config.get(parameter.name)
                 for parameter in ALL_PARAMETERS
@@ -253,6 +261,10 @@ def register_batches_routes(app: FastAPI, state: dict) -> None:
             batch_config["track_max_individuals"] = request.track_max_individuals
         if request.individual_prefix is not None:
             batch_config["individual_prefix"] = request.individual_prefix
+        for key, value in (("animal_size_min", request.animal_size_min),
+                           ("animal_size_max", request.animal_size_max)):
+            if value is not None:
+                batch_config[key] = value
         for name, value in (request.parameters or {}).items():
             if value is None:
                 batch_config.pop(name, None)
@@ -274,6 +286,12 @@ def register_batches_routes(app: FastAPI, state: dict) -> None:
             project_config["individual_prefix"] = request.individual_prefix
         if request.video_extension is not None:
             project_config["video_extension"] = request.video_extension
+        for key, value in (("animal_size_min", request.animal_size_min),
+                           ("animal_size_max", request.animal_size_max)):
+            if value is None:
+                project_config.pop(key, None)      # blank clears the override
+            else:
+                project_config[key] = value
         for name, value in (request.parameters or {}).items():
             if value is None:
                 project_config.pop(name, None)     # blank clears the override
@@ -475,6 +493,23 @@ def build_batches_tab_html(video_name: str) -> str:
         Blank means the value from default.settings is used. Batches and
         individual videos can override these.
       </div>
+      <div style="margin-bottom:8px;">
+        <label style="font-size:11px; color:#aaa; display:block; margin-bottom:2px;">
+          Animal size - min / max (px)</label>
+        <div style="display:flex; gap:6px;">
+          <input type="number" id="proj-animal-size-min" placeholder="min"
+                 onblur="saveProjectParams()"
+                 style="width:50%; padding:4px 6px; background:#1a1a2e; border:1px solid #415a77;
+                 border-radius:4px; color:#e0e0e0; font-size:12px;">
+          <input type="number" id="proj-animal-size-max" placeholder="max"
+                 onblur="saveProjectParams()"
+                 style="width:50%; padding:4px 6px; background:#1a1a2e; border:1px solid #415a77;
+                 border-radius:4px; color:#e0e0e0; font-size:12px;">
+        </div>
+        <div style="font-size:9px; color:#5a7a99; margin-top:1px;">
+          Blob size filter; written to detect_size_filter and track_size_filter.
+        </div>
+      </div>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:0 16px;">
         {_render_parameter_fields(ALL_PARAMETERS, "proj", "saveProjectParams()")}
       </div>
@@ -541,6 +576,8 @@ def build_batches_tab_html(video_name: str) -> str:
     document.getElementById("proj-max-individuals").value   = d.track_max_individuals ?? "";
     document.getElementById("proj-individual-prefix").value = d.individual_prefix ?? "";
     document.getElementById("proj-video-extension").value   = d.video_extension ?? "";
+    document.getElementById("proj-animal-size-min").value = d.animal_size_min ?? "";
+    document.getElementById("proj-animal-size-max").value = d.animal_size_max ?? "";
     setProjParamFields(d.parameters);
   }}
 
@@ -549,11 +586,15 @@ def build_batches_tab_html(video_name: str) -> str:
     const maxRaw     = document.getElementById("proj-max-individuals").value;
     const prefixRaw  = document.getElementById("proj-individual-prefix").value;
     const extRaw     = document.getElementById("proj-video-extension").value.trim();
+    const sizeMinRaw = document.getElementById("proj-animal-size-min").value.trim();
+    const sizeMaxRaw = document.getElementById("proj-animal-size-max").value.trim();
     const body = {{
       meta_real_width:       widthRaw === "" ? null : parseFloat(widthRaw),
       track_max_individuals: maxRaw === ""   ? null : parseInt(maxRaw),
       individual_prefix:     prefixRaw === "" ? null : prefixRaw,
       video_extension:       extRaw === "" ? null : extRaw,
+      animal_size_min:       sizeMinRaw === "" ? null : parseInt(sizeMinRaw),
+      animal_size_max:       sizeMaxRaw === "" ? null : parseInt(sizeMaxRaw),
       parameters:            readProjParamFields(),
     }};
     await fetch("/batches/update-project-params", {{method:"POST",
@@ -758,6 +799,18 @@ def build_batches_tab_html(video_name: str) -> str:
         batchUpdate(b.batch_name, {{individual_prefix: val === "" ? null : val}});
       }}, true));
     fields.appendChild(individualsPrefixRow);
+
+    const animalSizeRow = document.createElement("div");
+    animalSizeRow.style.display = "flex"; animalSizeRow.style.gap = "10px";
+    animalSizeRow.appendChild(makeField("Animal size min (px)", "number",
+      b.animal_size_min ?? "", (val) => {{
+        batchUpdate(b.batch_name, {{animal_size_min: val === "" ? null : parseInt(val)}});
+      }}, true));
+    animalSizeRow.appendChild(makeField("Animal size max (px)", "number",
+      b.animal_size_max ?? "", (val) => {{
+        batchUpdate(b.batch_name, {{animal_size_max: val === "" ? null : parseInt(val)}});
+      }}, true));
+    fields.appendChild(animalSizeRow);
 
     const membersLabel = document.createElement("div");
     membersLabel.style.fontSize = "11px"; membersLabel.style.color = "#aaa"; membersLabel.style.marginTop = "4px";

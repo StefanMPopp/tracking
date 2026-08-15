@@ -38,6 +38,37 @@ from ._resolve import resolve_batch_for_video, resolve_effective_config
 from ._settings import read_settings
 
 
+def resolve_effective_parameters(effective_config: dict, base_settings_file) -> dict:
+    """
+    Return the value each exposed parameter would actually take in a run:
+    the resolved project/batch/video value if set, otherwise the value in
+    default.settings, otherwise TRex's own default.
+
+    This is what the UI shows, so the fields reflect what pressing "Run
+    sweep" would really use rather than leaving inherited values blank.
+    """
+    from ._settings import read_settings
+
+    try:
+        base_settings = read_settings(base_settings_file)
+    except OSError:
+        base_settings = {}
+
+    resolved = {}
+    for parameter in ALL_PARAMETERS:
+        value = effective_config.get(parameter.name)
+        if value is None:
+            raw = base_settings.get(parameter.name)
+            try:
+                value = parameter.parse(raw)
+            except (TypeError, ValueError):
+                value = None
+        if value is None:
+            value = parameter.default
+        resolved[parameter.name] = value
+    return resolved
+
+
 def _render_parameter_fields(parameters: list, prefix: str) -> str:
     """
     Render form fields for a list of Parameters. Blank means "not set" —
@@ -145,10 +176,12 @@ def register_tune_routes(app: FastAPI, state: dict) -> None:
             "track_max_individuals":  effective_config.get("track_max_individuals"),
             "individual_prefix":      effective_config.get("individual_prefix"),
             "existing_clips":         _list_existing_clips(state, video_name),
-            "parameters": {
-                parameter.name: effective_config.get(parameter.name)
-                for parameter in ALL_PARAMETERS
-            },
+            # Values as they would actually be applied by a run (resolved
+            # config -> default.settings -> TRex default), so the UI shows
+            # the real starting point rather than blanks.
+            "parameters": resolve_effective_parameters(
+                effective_config, state["base_settings_file"]
+            ),
         })
 
     @app.post("/tuning/conversion-range")
@@ -432,9 +465,8 @@ def build_tune_tab_html(video_name: str) -> str:
     <div id="tune-status" style="font-size:11px; color:#7ec8e3; padding:6px;
          background:#0f3460; border-radius:4px; min-height:32px;">Loading…</div>
 
-    <div style="background:#0f3460; border-radius:6px; padding:10px;">
-      <h3 style="font-size:11px; color:#7ec8e3; text-transform:uppercase;
-           letter-spacing:0.8px; margin-bottom:8px;">Sweep parameters</h3>
+    <details open style="background:#0f3460; border-radius:6px; padding:10px;">
+      <summary style="font-size:11px; color:#7ec8e3; text-transform:uppercase; letter-spacing:0.8px; margin-bottom:8px; cursor:pointer; list-style:none; user-select:none;">Sweep parameters</summary>
 
       <div style="margin-bottom:6px;">
         <label style="font-size:11px; color:#aaa; display:block; margin-bottom:2px;">
@@ -481,18 +513,15 @@ def build_tune_tab_html(video_name: str) -> str:
       <button onclick="tuneStopSweep()" id="tune-stop-btn" style="display:none; width:100%;
               padding:8px 10px; border:none; border-radius:5px; cursor:pointer; font-size:12px;
               font-weight:700; background:#9d0208; color:#ffccd5; margin-top:6px;">⏹ Stop</button>
-    </div>
+    </details>
 
-    <div style="background:#0f3460; border-radius:6px; padding:10px;">
-      <h3 style="font-size:11px; color:#7ec8e3; text-transform:uppercase;
-           letter-spacing:0.8px; margin-bottom:8px;">
-        Existing clips (double-click to load)</h3>
+    <details open style="background:#0f3460; border-radius:6px; padding:10px;">
+      <summary style="font-size:11px; color:#7ec8e3; text-transform:uppercase; letter-spacing:0.8px; margin-bottom:8px; cursor:pointer; list-style:none; user-select:none;">Existing clips (double-click to load)</summary>
       <div id="tune-clip-list" style="max-height:220px; overflow-y:auto; font-size:11px;"></div>
-    </div>
+    </details>
 
-    <div style="background:#0f3460; border-radius:6px; padding:10px;">
-      <h3 style="font-size:11px; color:#7ec8e3; text-transform:uppercase;
-           letter-spacing:0.8px; margin-bottom:8px;">Selected clip's values</h3>
+    <details open style="background:#0f3460; border-radius:6px; padding:10px;">
+      <summary style="font-size:11px; color:#7ec8e3; text-transform:uppercase; letter-spacing:0.8px; margin-bottom:8px; cursor:pointer; list-style:none; user-select:none;">Selected clip's values</summary>
       <div style="margin-bottom:6px;">
         <label style="font-size:11px; color:#aaa; display:block; margin-bottom:2px;">Threshold</label>
         <input type="number" id="tune-selected-threshold" placeholder="select a clip"
@@ -510,19 +539,20 @@ def build_tune_tab_html(video_name: str) -> str:
                  border-radius:4px; color:#e0e0e0; font-size:12px;">
         </div>
       </div>
-    </div>
+      <div style="border-top:1px solid #1a3a5c; margin-top:8px; padding-top:8px;">
+        {_render_parameter_fields(ALL_PARAMETERS, "tunesel")}
+      </div>
+    </details>
 
-    <div style="background:#0f3460; border-radius:6px; padding:10px;">
-      <h3 style="font-size:11px; color:#7ec8e3; text-transform:uppercase;
-           letter-spacing:0.8px; margin-bottom:8px;">Save to project</h3>
+    <details open style="background:#0f3460; border-radius:6px; padding:10px;">
+      <summary style="font-size:11px; color:#7ec8e3; text-transform:uppercase; letter-spacing:0.8px; margin-bottom:8px; cursor:pointer; list-style:none; user-select:none;">Save to project</summary>
       <button onclick="tuneSaveToProject()" style="width:100%; padding:7px 10px; border:none;
               border-radius:5px; cursor:pointer; font-size:12px; font-weight:600;
               background:#2d6a4f; color:#d8f3dc;">💾 Save to project defaults</button>
-    </div>
+    </details>
 
-    <div style="background:#0f3460; border-radius:6px; padding:10px;">
-      <h3 style="font-size:11px; color:#7ec8e3; text-transform:uppercase;
-           letter-spacing:0.8px; margin-bottom:8px;">Save to batch</h3>
+    <details open style="background:#0f3460; border-radius:6px; padding:10px;">
+      <summary style="font-size:11px; color:#7ec8e3; text-transform:uppercase; letter-spacing:0.8px; margin-bottom:8px; cursor:pointer; list-style:none; user-select:none;">Save to batch</summary>
       <div id="tune-clip-batch-note" style="font-size:10px; color:#789; margin-bottom:6px;"></div>
       <select id="tune-batch-select" style="width:100%; padding:5px 6px; background:#1a1a2e;
               border:1px solid #415a77; border-radius:4px; color:#e0e0e0; font-size:12px;
@@ -532,7 +562,7 @@ def build_tune_tab_html(video_name: str) -> str:
       <button onclick="tuneSaveToBatch()" style="width:100%; padding:7px 10px; border:none;
               border-radius:5px; cursor:pointer; font-size:12px; font-weight:600;
               background:#6a0572; color:#f3e5f5;">💾 Save to selected batch</button>
-    </div>
+    </details>
   </div>
 
   <div style="flex:1; display:flex; flex-direction:column; padding:16px; overflow:hidden;">
@@ -567,10 +597,10 @@ def build_tune_tab_html(video_name: str) -> str:
 
   const PARAM_NAMES = {param_names_json};
 
-  function readParamFields() {{
+  function readParamFields(prefix) {{
     const values = {{}};
     PARAM_NAMES.forEach(name => {{
-      const el = document.getElementById("tune-param-" + name);
+      const el = document.getElementById((prefix || "tune") + "-param-" + name);
       if (!el) return;
       const raw = el.value.trim();
       if (raw === "") {{ values[name] = null; return; }}
@@ -579,9 +609,9 @@ def build_tune_tab_html(video_name: str) -> str:
     return values;
   }}
 
-  function setParamFields(values) {{
+  function setParamFields(values, prefix) {{
     PARAM_NAMES.forEach(name => {{
-      const el = document.getElementById("tune-param-" + name);
+      const el = document.getElementById((prefix || "tune") + "-param-" + name);
       if (!el) return;
       const v = values ? values[name] : null;
       el.value = (v === null || v === undefined) ? "" : String(v);
@@ -707,13 +737,14 @@ def build_tune_tab_html(video_name: str) -> str:
     // sidebar (which may have changed since this clip was produced).
     document.getElementById("tune-selected-size-min").value = "";
     document.getElementById("tune-selected-size-max").value = "";
+    setParamFields(null, "tunesel");
     try {{
       const res = await fetch(`/tuning/clip-settings/${{filename}}`);
       const d = await res.json();
       if (d.found) {{
         document.getElementById("tune-selected-size-min").value = d.animal_size_min ?? "";
         document.getElementById("tune-selected-size-max").value = d.animal_size_max ?? "";
-        setParamFields(d.parameters);
+        setParamFields(d.parameters, "tunesel");
       }}
     }} catch (err) {{
       // Settings file missing/unreadable — leave size fields blank rather
@@ -729,7 +760,7 @@ def build_tune_tab_html(video_name: str) -> str:
       confirmed_detect_threshold: thresholdRaw === "" ? null : parseInt(thresholdRaw),
       animal_size_min: sizeMinRaw === "" ? null : parseInt(sizeMinRaw),
       animal_size_max: sizeMaxRaw === "" ? null : parseInt(sizeMaxRaw),
-      parameters: readParamFields(),
+      parameters: readParamFields("tunesel"),
     }};
   }}
 
