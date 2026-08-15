@@ -46,6 +46,10 @@ def patch_settings(
 
 def _to_trex_string(value) -> str:
     """Convert a Python value to its TRex settings string representation."""
+    if isinstance(value, bool):
+        # Must precede the int check: bool is a subclass of int in Python,
+        # and TRex expects lowercase true/false, not True/False.
+        return "true" if value else "false"
     if isinstance(value, list):
         if value and isinstance(value[0], list):
             inner = ",".join(

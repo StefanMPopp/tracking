@@ -28,8 +28,62 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
+from ._parameters import (
+    ALL_PARAMETERS,
+    read_from_settings,
+    DETECTION_PARAMETERS,
+    TRACKING_PARAMETERS,
+)
 from ._resolve import resolve_batch_for_video, resolve_effective_config
 from ._settings import read_settings
+
+
+def _render_parameter_fields(parameters: list, prefix: str) -> str:
+    """
+    Render form fields for a list of Parameters. Blank means "not set" —
+    the value from default.settings is then used, shown as the placeholder.
+    """
+    blocks = []
+    for parameter in parameters:
+        field_id = f"{prefix}-param-{parameter.name}"
+        if parameter.kind == "bool":
+            control = (
+                f'<select id="{field_id}" style="width:100%; padding:4px 6px; '
+                f'background:#1a1a2e; border:1px solid #415a77; border-radius:4px; '
+                f'color:#e0e0e0; font-size:12px;">'
+                f'<option value="">(default: {str(parameter.default).lower()})</option>'
+                f'<option value="true">true</option>'
+                f'<option value="false">false</option>'
+                f'</select>'
+            )
+        else:
+            step = "1" if parameter.kind == "int" else "any"
+            control = (
+                f'<input type="number" step="{step}" id="{field_id}" '
+                f'placeholder="default: {parameter.default}" '
+                f'style="width:100%; padding:4px 6px; background:#1a1a2e; '
+                f'border:1px solid #415a77; border-radius:4px; color:#e0e0e0; '
+                f'font-size:12px;">'
+            )
+
+        gate_note = ""
+        if parameter.depends_on:
+            gate_note = (
+                f'<div style="font-size:9px; color:#7b6a3a; margin-top:1px;">'
+                f'only applies when {parameter.depends_on} is true</div>'
+            )
+
+        blocks.append(
+            f'<div style="margin-bottom:7px;" data-param="{parameter.name}">'
+            f'<label style="font-size:11px; color:#aaa; display:block; '
+            f'margin-bottom:2px;">{parameter.label}</label>'
+            f'{control}'
+            f'<div style="font-size:9px; color:#5a7a99; margin-top:1px; '
+            f'line-height:1.35;">{parameter.help}</div>'
+            f'{gate_note}'
+            f'</div>'
+        )
+    return "\n".join(blocks)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +96,9 @@ class RunSweepRequest(BaseModel):
     thresholds:      list[int]
     animal_size_min: int | None = None
     animal_size_max: int | None = None
+    # Exposed TRex parameters, keyed by parameter name (see _parameters.py).
+    # Absent or null entries mean "leave to default.settings".
+    parameters:      dict = {}
 
 class UpdateConversionRangeRequest(BaseModel):
     video_conversion_range: list[int] | None = None   # None clears the override
@@ -50,6 +107,7 @@ class SaveValuesRequest(BaseModel):
     confirmed_detect_threshold: int | None = None
     animal_size_min:            int | None = None
     animal_size_max:             int | None = None
+    parameters:                 dict = {}
 
 class SaveToBatchRequest(SaveValuesRequest):
     batch_name: str
@@ -87,6 +145,10 @@ def register_tune_routes(app: FastAPI, state: dict) -> None:
             "track_max_individuals":  effective_config.get("track_max_individuals"),
             "individual_prefix":      effective_config.get("individual_prefix"),
             "existing_clips":         _list_existing_clips(state, video_name),
+            "parameters": {
+                parameter.name: effective_config.get(parameter.name)
+                for parameter in ALL_PARAMETERS
+            },
         })
 
     @app.post("/tuning/conversion-range")
@@ -126,6 +188,11 @@ def register_tune_routes(app: FastAPI, state: dict) -> None:
             project_config["animal_size_min"] = request.animal_size_min
         if request.animal_size_max is not None:
             project_config["animal_size_max"] = request.animal_size_max
+        for name, value in (request.parameters or {}).items():
+            if value is None:
+                project_config.pop(name, None)    # blank clears the override
+            else:
+                project_config[name] = value
         _write_project_config(state, project_config)
         logger.info(
             "Saved to project defaults: threshold=%s, size=[%s,%s]",
@@ -155,6 +222,11 @@ def register_tune_routes(app: FastAPI, state: dict) -> None:
             batch_config["animal_size_min"] = request.animal_size_min
         if request.animal_size_max is not None:
             batch_config["animal_size_max"] = request.animal_size_max
+        for name, value in (request.parameters or {}).items():
+            if value is None:
+                batch_config.pop(name, None)
+            else:
+                batch_config[name] = value
 
         _write_project_config(state, project_config)
         logger.info(
@@ -206,6 +278,12 @@ def register_tune_routes(app: FastAPI, state: dict) -> None:
             effective_config["animal_size_min"] = request.animal_size_min
         if request.animal_size_max is not None:
             effective_config["animal_size_max"] = request.animal_size_max
+
+        # Exposed TRex parameters for this sweep only (not persisted here —
+        # use Save to project / Save to batch for that).
+        for name, value in (request.parameters or {}).items():
+            if value is not None:
+                effective_config[name] = value
 
         tuning_dir = project_dir / "2_tracking" / "tuning"
         videos_dir = state["videos_dir"]   # already mode-resolved by app.py
@@ -281,6 +359,7 @@ def register_tune_routes(app: FastAPI, state: dict) -> None:
                 "found": False,
                 "animal_size_min": None,
                 "animal_size_max": None,
+                "parameters": {},
             })
 
         from ._settings import read_settings
@@ -300,6 +379,7 @@ def register_tune_routes(app: FastAPI, state: dict) -> None:
             "found": True,
             "animal_size_min": size_min,
             "animal_size_max": size_max,
+            "parameters": read_from_settings(settings),
         })
 
 
@@ -338,6 +418,8 @@ def _list_existing_clips(state: dict, video_name: str | None) -> list[str]:
 # =============================================================================
 
 def build_tune_tab_html(video_name: str) -> str:
+    import json as _json
+    param_names_json = _json.dumps([p.name for p in ALL_PARAMETERS])
     return f"""
 <div style="display:flex; width:100%; height:100%;">
 
@@ -382,6 +464,15 @@ def build_tune_tab_html(video_name: str) -> str:
                style="width:100%; padding:5px 6px; background:#1a1a2e; border:1px solid #415a77;
                border-radius:4px; color:#e0e0e0; font-size:12px;"
                onblur="tuneSaveConversionRange()">
+      </div>
+
+      <div style="border-top:1px solid #1a3a5c; margin:10px 0 8px; padding-top:8px;">
+        <div style="font-size:10px; color:#7ec8e3; text-transform:uppercase;
+             letter-spacing:0.8px; margin-bottom:6px;">Detection</div>
+        {_render_parameter_fields(DETECTION_PARAMETERS, "tune")}
+        <div style="font-size:10px; color:#7ec8e3; text-transform:uppercase;
+             letter-spacing:0.8px; margin:10px 0 6px;">Tracking</div>
+        {_render_parameter_fields(TRACKING_PARAMETERS, "tune")}
       </div>
 
       <button onclick="tuneRunSweep()" id="tune-run-btn" style="width:100%; padding:8px 10px;
@@ -474,12 +565,36 @@ def build_tune_tab_html(video_name: str) -> str:
     setupMasterScrubLoop();
   }};
 
+  const PARAM_NAMES = {param_names_json};
+
+  function readParamFields() {{
+    const values = {{}};
+    PARAM_NAMES.forEach(name => {{
+      const el = document.getElementById("tune-param-" + name);
+      if (!el) return;
+      const raw = el.value.trim();
+      if (raw === "") {{ values[name] = null; return; }}
+      values[name] = (raw === "true") ? true : (raw === "false") ? false : parseFloat(raw);
+    }});
+    return values;
+  }}
+
+  function setParamFields(values) {{
+    PARAM_NAMES.forEach(name => {{
+      const el = document.getElementById("tune-param-" + name);
+      if (!el) return;
+      const v = values ? values[name] : null;
+      el.value = (v === null || v === undefined) ? "" : String(v);
+    }});
+  }}
+
   async function tuneLoadConfig() {{
     const res = await fetch("/tuning/config"), d = await res.json();
     document.getElementById("tune-thresholds").value = (d.sweep_thresholds || []).join(",");
     if (d.animal_size_min != null) document.getElementById("tune-size-min").value = d.animal_size_min;
     if (d.animal_size_max != null) document.getElementById("tune-size-max").value = d.animal_size_max;
     if (d.video_conversion_range) document.getElementById("tune-conversion-range").value = d.video_conversion_range.join(",");
+    setParamFields(d.parameters);
     renderClipList(d.existing_clips || []);
     tuneSetStatus(d.video_name ? `Ready — ${{d.video_name}}` : "No video selected.");
   }}
@@ -516,6 +631,7 @@ def build_tune_tab_html(video_name: str) -> str:
           thresholds,
           animal_size_min: sizeMin === "" ? null : parseInt(sizeMin),
           animal_size_max: sizeMax === "" ? null : parseInt(sizeMax),
+          parameters: readParamFields(),
         }})}});
       const d = await res.json();
       if (d.error) {{ tuneSetStatus("Sweep failed: " + d.error); return; }}
@@ -597,6 +713,7 @@ def build_tune_tab_html(video_name: str) -> str:
       if (d.found) {{
         document.getElementById("tune-selected-size-min").value = d.animal_size_min ?? "";
         document.getElementById("tune-selected-size-max").value = d.animal_size_max ?? "";
+        setParamFields(d.parameters);
       }}
     }} catch (err) {{
       // Settings file missing/unreadable — leave size fields blank rather
@@ -612,6 +729,7 @@ def build_tune_tab_html(video_name: str) -> str:
       confirmed_detect_threshold: thresholdRaw === "" ? null : parseInt(thresholdRaw),
       animal_size_min: sizeMinRaw === "" ? null : parseInt(sizeMinRaw),
       animal_size_max: sizeMaxRaw === "" ? null : parseInt(sizeMaxRaw),
+      parameters: readParamFields(),
     }};
   }}
 

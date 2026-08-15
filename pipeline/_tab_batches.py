@@ -26,6 +26,58 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+from ._parameters import ALL_PARAMETERS
+
+
+def _render_parameter_fields(parameters: list, prefix: str, on_change: str) -> str:
+    """
+    Render form fields for a list of Parameters. Blank means "not set", so
+    the value from the next level down (batch -> project -> default.settings)
+    applies. on_change is the JS called on blur/change.
+    """
+    blocks = []
+    for parameter in parameters:
+        field_id = f"{prefix}-param-{parameter.name}"
+        if parameter.kind == "bool":
+            control = (
+                f'<select id="{field_id}" onchange="{on_change}" '
+                f'style="width:100%; padding:4px 6px; background:#1a1a2e; '
+                f'border:1px solid #415a77; border-radius:4px; color:#e0e0e0; '
+                f'font-size:12px;">'
+                f'<option value="">(default: {str(parameter.default).lower()})</option>'
+                f'<option value="true">true</option>'
+                f'<option value="false">false</option>'
+                f'</select>'
+            )
+        else:
+            step = "1" if parameter.kind == "int" else "any"
+            control = (
+                f'<input type="number" step="{step}" id="{field_id}" '
+                f'onblur="{on_change}" placeholder="default: {parameter.default}" '
+                f'style="width:100%; padding:4px 6px; background:#1a1a2e; '
+                f'border:1px solid #415a77; border-radius:4px; color:#e0e0e0; '
+                f'font-size:12px;">'
+            )
+
+        gate_note = ""
+        if parameter.depends_on:
+            gate_note = (
+                f'<div style="font-size:9px; color:#7b6a3a; margin-top:1px;">'
+                f'only applies when {parameter.depends_on} is true</div>'
+            )
+
+        blocks.append(
+            f'<div style="margin-bottom:8px;">'
+            f'<label style="font-size:11px; color:#aaa; display:block; '
+            f'margin-bottom:2px;">{parameter.label}</label>'
+            f'{control}'
+            f'<div style="font-size:9px; color:#5a7a99; margin-top:1px; '
+            f'line-height:1.35;">{parameter.help}</div>'
+            f'{gate_note}'
+            f'</div>'
+        )
+    return "\n".join(blocks)
+
 THUMBNAIL_SIZE = (220, 160)   # width, height in px
 
 
@@ -43,6 +95,7 @@ class RemoveRequest(BaseModel):
 
 class UpdateBatchRequest(BaseModel):
     batch_name: str
+    parameters: dict = {}
     description: str | None = None
     confirmed_detect_threshold: int | None = None
     video_conversion_range: list[int] | None = None
@@ -54,6 +107,7 @@ class UpdateProjectParamsRequest(BaseModel):
     track_max_individuals: int | None = None
     individual_prefix:     str | None = None
     video_extension:       str | None = None
+    parameters:            dict = {}
 
 
 # =============================================================================
@@ -109,6 +163,17 @@ def register_batches_routes(app: FastAPI, state: dict) -> None:
             "track_max_individuals": project_config.get("track_max_individuals"),
             "individual_prefix":     project_config.get("individual_prefix"),
             "video_extension":       project_config.get("video_extension"),
+            "parameters": {
+                parameter.name: project_config.get(parameter.name)
+                for parameter in ALL_PARAMETERS
+            },
+            "batch_parameters": {
+                batch_name: {
+                    parameter.name: batch_config.get(parameter.name)
+                    for parameter in ALL_PARAMETERS
+                }
+                for batch_name, batch_config in batches_config.items()
+            },
         })
 
     @app.post("/batches/assign")
@@ -188,6 +253,11 @@ def register_batches_routes(app: FastAPI, state: dict) -> None:
             batch_config["track_max_individuals"] = request.track_max_individuals
         if request.individual_prefix is not None:
             batch_config["individual_prefix"] = request.individual_prefix
+        for name, value in (request.parameters or {}).items():
+            if value is None:
+                batch_config.pop(name, None)
+            else:
+                batch_config[name] = value
 
         _write_project_config(state, project_config)
         return JSONResponse({"ok": True})
@@ -204,6 +274,11 @@ def register_batches_routes(app: FastAPI, state: dict) -> None:
             project_config["individual_prefix"] = request.individual_prefix
         if request.video_extension is not None:
             project_config["video_extension"] = request.video_extension
+        for name, value in (request.parameters or {}).items():
+            if value is None:
+                project_config.pop(name, None)     # blank clears the override
+            else:
+                project_config[name] = value
 
         _write_project_config(state, project_config)
         logger.info(
@@ -315,6 +390,8 @@ def _render_mask_thumbnail(batch_name: str, masks_dir: Path) -> str | None:
 # =============================================================================
 
 def build_batches_tab_html(video_name: str) -> str:
+    import json as _json
+    param_names_json = _json.dumps([p.name for p in ALL_PARAMETERS])
     return f"""
 <div style="display:flex; width:100%; height:100%;">
 
@@ -393,6 +470,19 @@ def build_batches_tab_html(video_name: str) -> str:
     <div style="background:#16213e; border:1px solid #0f3460; border-radius:8px;
          padding:12px 14px; margin-bottom:14px;">
       <h3 style="font-size:11px; color:#7ec8e3; text-transform:uppercase;
+           letter-spacing:0.8px; margin-bottom:4px;">Project tracking parameters</h3>
+      <div style="font-size:10px; color:#5a7a99; margin-bottom:10px;">
+        Blank means the value from default.settings is used. Batches and
+        individual videos can override these.
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:0 16px;">
+        {_render_parameter_fields(ALL_PARAMETERS, "proj", "saveProjectParams()")}
+      </div>
+    </div>
+
+    <div style="background:#16213e; border:1px solid #0f3460; border-radius:8px;
+         padding:12px 14px; margin-bottom:14px;">
+      <h3 style="font-size:11px; color:#7ec8e3; text-transform:uppercase;
            letter-spacing:0.8px; margin-bottom:8px;">Project background defaults</h3>
       <div id="batch-bg-params" style="font-size:12px; color:#ccc;">Loading…</div>
     </div>
@@ -423,11 +513,35 @@ def build_batches_tab_html(video_name: str) -> str:
     renderProjectParams(d);
   }}
 
+  const PARAM_NAMES = {param_names_json};
+
+  function readProjParamFields() {{
+    const values = {{}};
+    PARAM_NAMES.forEach(name => {{
+      const el = document.getElementById("proj-param-" + name);
+      if (!el) return;
+      const raw = el.value.trim();
+      if (raw === "") {{ values[name] = null; return; }}
+      values[name] = (raw === "true") ? true : (raw === "false") ? false : parseFloat(raw);
+    }});
+    return values;
+  }}
+
+  function setProjParamFields(values) {{
+    PARAM_NAMES.forEach(name => {{
+      const el = document.getElementById("proj-param-" + name);
+      if (!el) return;
+      const v = values ? values[name] : null;
+      el.value = (v === null || v === undefined) ? "" : String(v);
+    }});
+  }}
+
   function renderProjectParams(d) {{
     document.getElementById("proj-meta-real-width").value   = d.meta_real_width ?? "";
     document.getElementById("proj-max-individuals").value   = d.track_max_individuals ?? "";
     document.getElementById("proj-individual-prefix").value = d.individual_prefix ?? "";
     document.getElementById("proj-video-extension").value   = d.video_extension ?? "";
+    setProjParamFields(d.parameters);
   }}
 
   window.saveProjectParams = async function() {{
@@ -440,6 +554,7 @@ def build_batches_tab_html(video_name: str) -> str:
       track_max_individuals: maxRaw === ""   ? null : parseInt(maxRaw),
       individual_prefix:     prefixRaw === "" ? null : prefixRaw,
       video_extension:       extRaw === "" ? null : extRaw,
+      parameters:            readProjParamFields(),
     }};
     await fetch("/batches/update-project-params", {{method:"POST",
       headers:{{"Content-Type":"application/json"}}, body:JSON.stringify(body)}});

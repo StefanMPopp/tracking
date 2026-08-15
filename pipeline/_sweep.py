@@ -32,6 +32,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
+from ._parameters import collect_overrides
 from ._settings import patch_settings
 
 logger = logging.getLogger(__name__)
@@ -192,6 +193,13 @@ def run_sweep(
             "track_max_individuals": track_max_individuals,
             "individual_prefix":     individual_prefix,
         }
+
+        # Parameters exposed in the Tune / Parameters tabs. Only those actually
+        # set in the resolved config are written; the rest fall through to
+        # default.settings. track_max_individuals is included in the spec and
+        # overwrites the value set above when configured there.
+        overrides.update(collect_overrides(effective_config))
+
         if video_conversion_range is not None:
             overrides["video_conversion_range"] = video_conversion_range
 
